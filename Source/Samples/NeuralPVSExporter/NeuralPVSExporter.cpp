@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -72,6 +73,70 @@ namespace
         oss << std::setw(4) << std::setfill('0') << index << suffix;
         return oss.str();
     }
+
+    std::string trim(std::string value)
+    {
+        auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](unsigned char c) { return !isSpace(c); }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [&](unsigned char c) { return !isSpace(c); }).base(), value.end());
+        return value;
+    }
+
+    std::string toLower(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        return value;
+    }
+
+    std::vector<std::string> splitCsvLine(std::string line)
+    {
+        std::replace(line.begin(), line.end(), ';', ',');
+        std::stringstream stream(line);
+
+        std::vector<std::string> tokens;
+        std::string token;
+        while (std::getline(stream, token, ','))
+        {
+            tokens.push_back(trim(token));
+        }
+
+        return tokens;
+    }
+
+    bool tryParseFloat(const std::string& value, float& parsed)
+    {
+        try
+        {
+            size_t parsedChars = 0;
+            parsed = std::stof(value, &parsedChars);
+            return parsedChars == value.size();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    uint32_t countSetBits(const std::vector<uint8_t>& bytes)
+    {
+        uint32_t count = 0;
+        for (uint8_t byte : bytes)
+        {
+            uint8_t v = byte;
+            while (v != 0)
+            {
+                count += uint32_t(v & 1u);
+                v >>= 1;
+            }
+        }
+        return count;
+    }
+
+    float3 normalizedOrDefault(float3 value, float3 fallback)
+    {
+        const float len = length(value);
+        return len > 0.00001f ? value / len : fallback;
+    }
 }
 
 NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config) : SampleApp(config) {}
@@ -121,6 +186,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             };
             w.dropdown("Sampling mode", samplingModes, mSamplingMode);
             w.textbox("Path CSV", mPathCsvText);
+
+            Gui::DropdownList visibilityModes = {
+                {0, "View cell rays"},
+                {1, "Camera frustum"},
+            };
+            w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
+            w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
 
             w.var("Samples per axis", mSamplesPerAxis, 1u, 16u);
             w.var("Volume extent scale", mVolumeExtentScale, 0.05f, 2.0f, 0.01f);
@@ -246,15 +318,15 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
     const float viewCellRadius = std::max(0.1f, sceneBounds.radius() * 0.02f);
     const float3 sampleStep = sceneExtent * mSampleStepScale;
 
-    std::vector<float3> centers;
+    std::vector<ExportSample> samples;
     if (mSamplingMode == 1)
     {
-        centers = loadPathCenters(std::filesystem::path(mPathCsvText));
+        samples = loadPathSamples(std::filesystem::path(mPathCsvText));
     }
     else
     {
         const uint32_t samplesPerAxis = mSamplesPerAxis < 1u ? 1u : mSamplesPerAxis;
-        centers.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
+        samples.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
 
         const float centerOffset = 0.5f * float(samplesPerAxis - 1u);
         for (uint32_t z = 0; z < samplesPerAxis; ++z)
@@ -264,33 +336,37 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
                 for (uint32_t x = 0; x < samplesPerAxis; ++x)
                 {
                     const float3 offset = float3(float(x) - centerOffset, float(y) - centerOffset, float(z) - centerOffset);
-                    centers.push_back(sceneCenter + offset * sampleStep);
+                    ExportSample sample;
+                    sample.center = sceneCenter + offset * sampleStep;
+                    samples.push_back(sample);
                 }
             }
         }
     }
-    auto countSetBits = [](const std::vector<uint8_t>& bytes) -> uint64_t
+
+    const bool useCameraFrustum = mVisibilityMode == 1;
+    if (useCameraFrustum)
     {
-        uint64_t count = 0;
-        for (uint8_t byte : bytes)
+        if (mSamplingMode != 1)
         {
-            uint8_t v = byte;
-            while (v != 0)
-            {
-                count += uint64_t(v & 1u);
-                v >>= 1;
-            }
+            FALCOR_THROW("Camera frustum visibility requires Path CSV sampling.");
         }
-        return count;
-    };
+
+        const bool allSamplesHaveCamera = std::all_of(samples.begin(), samples.end(), [](const ExportSample& sample) { return sample.hasCamera; });
+        if (!allSamplesHaveCamera)
+        {
+            FALCOR_THROW("Camera frustum visibility requires CSV columns forward_x, forward_y, forward_z, and fov.");
+        }
+    }
 
     std::vector<uint64_t> gvBitCounts;
     std::vector<uint64_t> pvvBitCounts;
-    gvBitCounts.reserve(centers.size());
-    pvvBitCounts.reserve(centers.size());
-    for (uint32_t sampleIndex = 0; sampleIndex < static_cast<uint32_t>(centers.size()); ++sampleIndex)
+    gvBitCounts.reserve(samples.size());
+    pvvBitCounts.reserve(samples.size());
+    for (uint32_t sampleIndex = 0; sampleIndex < static_cast<uint32_t>(samples.size()); ++sampleIndex)
     {
-        const float3 viewCellCenter = centers[sampleIndex];
+        const ExportSample& sample = samples[sampleIndex];
+        const float3 viewCellCenter = sample.center;
         const float3 volumeMin = viewCellCenter - volumeExtent * 0.5f;
 
         pRenderContext->clearUAV(mpGVVolume->getUAV().get(), uint4(0, 0, 0, 0));
@@ -318,7 +394,11 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
         pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
         pvvRoot["PVVCB"]["gViewCellCenter"] = viewCellCenter;
         pvvRoot["PVVCB"]["gViewCellRadius"] = viewCellRadius;
-        pvvRoot["PVVCB"]["gSampleCount"] = 9u;
+        pvvRoot["PVVCB"]["gSampleCount"] = useCameraFrustum ? 1u : 9u;
+        pvvRoot["PVVCB"]["gUseCameraFrustum"] = useCameraFrustum ? 1u : 0u;
+        pvvRoot["PVVCB"]["gCameraFovYRadians"] = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
+        pvvRoot["PVVCB"]["gCameraAspectRatio"] = std::max(0.1f, mCameraAspectRatio);
+        pvvRoot["PVVCB"]["gCameraForward"] = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
 
         mpPVVPass->execute(pRenderContext, mVolumeSize / 32, mVolumeSize, mVolumeDepth);
         pRenderContext->submit(true);
@@ -344,7 +424,7 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
         gvBitCounts.push_back(countSetBits(gvBytes));
         pvvBitCounts.push_back(countSetBits(pvvBytes));
 
-        mLastExportStatus = "Exported sample " + std::to_string(sampleIndex) + " / " + std::to_string(centers.size() - 1);
+        mLastExportStatus = "Exported sample " + std::to_string(sampleIndex) + " / " + std::to_string(samples.size() - 1);
     }
     const std::filesystem::path datasetRoot = mOutputRoot / mDatasetName;
     std::filesystem::create_directories(datasetRoot);
@@ -354,8 +434,10 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
     metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
     metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
     metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
+    metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "camera_frustum" : "view_cell") << "\",\n";
     metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
-    metadata << "  \"sample_count\": " << centers.size() << ",\n";
+    metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
+    metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
     metadata << "  \"scene_bounds_max\": [" << sceneBounds.maxPoint.x << ", " << sceneBounds.maxPoint.y << ", " << sceneBounds.maxPoint.z << "],\n";
@@ -365,24 +447,27 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
     metadata << "  \"sample_step\": [" << sampleStep.x << ", " << sampleStep.y << ", " << sampleStep.z << "],\n";
     metadata << "  \"samples\": [\n";
 
-    for (size_t i = 0; i < centers.size(); ++i)
+    for (size_t i = 0; i < samples.size(); ++i)
     {
         metadata << "    {";
         metadata << "\"index\": " << i << ", ";
-        metadata << "\"center\": [" << centers[i].x << ", " << centers[i].y << ", " << centers[i].z << "], ";
+        metadata << "\"center\": [" << samples[i].center.x << ", " << samples[i].center.y << ", " << samples[i].center.z << "], ";
+        metadata << "\"has_camera\": " << (samples[i].hasCamera ? "true" : "false") << ", ";
+        metadata << "\"forward\": [" << samples[i].forward.x << ", " << samples[i].forward.y << ", " << samples[i].forward.z << "], ";
+        metadata << "\"fov_y_degrees\": " << samples[i].fovYDegrees << ", ";
         metadata << "\"gv_file\": \"gv/" << std::setw(4) << std::setfill('0') << i << "_gv.bin.gz\", ";
         metadata << "\"pvv_file\": \"pvv/" << std::setw(4) << std::setfill('0') << i << "_pvv.bin.gz\", ";
         metadata << "\"gv_set_bits\": " << gvBitCounts[i] << ", ";
         metadata << "\"pvv_set_bits\": " << pvvBitCounts[i];
         metadata << "}";
-        if (i + 1 < centers.size()) metadata << ",";
+        if (i + 1 < samples.size()) metadata << ",";
         metadata << "\n";
     }
 
     metadata << "  ]\n";
     metadata << "}\n";
 
-    mLastExportStatus = "Exported " + std::to_string(centers.size()) + " " + mDatasetName + " samples with metadata.";
+    mLastExportStatus = "Exported " + std::to_string(samples.size()) + " " + mDatasetName + " samples with metadata.";
 }
 
 void NeuralPVSExporter::writeVolumePair(
@@ -481,7 +566,7 @@ void NeuralPVSExporter::writeDebugProjections(
     writePgm(makeName("yz"), yz, mVolumeSize, mVolumeDepth);
 }
 
-std::vector<float3> NeuralPVSExporter::loadPathCenters(const std::filesystem::path& path) const
+std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(const std::filesystem::path& path) const
 {
     std::ifstream file(path);
     if (!file)
@@ -489,8 +574,19 @@ std::vector<float3> NeuralPVSExporter::loadPathCenters(const std::filesystem::pa
         FALCOR_THROW("Failed to open path CSV '{}'.", path.string());
     }
 
-    std::vector<float3> centers;
+    std::vector<ExportSample> samples;
     std::string line;
+    std::vector<std::string> header;
+
+    auto findColumn = [&](const std::string& name) -> int
+    {
+        for (size_t i = 0; i < header.size(); ++i)
+        {
+            if (toLower(header[i]) == name)
+                return int(i);
+        }
+        return -1;
+    };
 
     while (std::getline(file, line))
     {
@@ -498,32 +594,61 @@ std::vector<float3> NeuralPVSExporter::loadPathCenters(const std::filesystem::pa
             continue;
         if (line[0] == '#')
             continue;
-        if (line.find('x') != std::string::npos && line.find('y') != std::string::npos && line.find('z') != std::string::npos)
+
+        std::vector<std::string> tokens = splitCsvLine(line);
+        if (tokens.size() < 3)
             continue;
 
-        std::replace(line.begin(), line.end(), ';', ',');
-        std::stringstream stream(line);
-
-        std::string sx;
-        std::string sy;
-        std::string sz;
-
-        if (!std::getline(stream, sx, ','))
+        float x = 0.f;
+        float y = 0.f;
+        float z = 0.f;
+        if (!tryParseFloat(tokens[0], x) || !tryParseFloat(tokens[1], y) || !tryParseFloat(tokens[2], z))
+        {
+            header = tokens;
             continue;
-        if (!std::getline(stream, sy, ','))
-            continue;
-        if (!std::getline(stream, sz, ','))
-            continue;
+        }
 
-        centers.push_back(float3(std::stof(sx), std::stof(sy), std::stof(sz)));
+        ExportSample sample;
+        sample.center = float3(x, y, z);
+
+        int forwardX = findColumn("forward_x");
+        int forwardY = findColumn("forward_y");
+        int forwardZ = findColumn("forward_z");
+        int fov = findColumn("fov");
+
+        if (forwardX < 0 && tokens.size() >= 11)
+        {
+            forwardX = 7;
+            forwardY = 8;
+            forwardZ = 9;
+            fov = 10;
+        }
+
+        if (forwardX >= 0 && forwardY >= 0 && forwardZ >= 0 && fov >= 0 &&
+            size_t(std::max(std::max(forwardX, forwardY), std::max(forwardZ, fov))) < tokens.size())
+        {
+            float fx = 0.f;
+            float fy = 0.f;
+            float fz = -1.f;
+            float fovYDegrees = 60.f;
+            if (tryParseFloat(tokens[forwardX], fx) && tryParseFloat(tokens[forwardY], fy) &&
+                tryParseFloat(tokens[forwardZ], fz) && tryParseFloat(tokens[fov], fovYDegrees))
+            {
+                sample.forward = normalizedOrDefault(float3(fx, fy, fz), float3(0.f, 0.f, -1.f));
+                sample.fovYDegrees = fovYDegrees;
+                sample.hasCamera = true;
+            }
+        }
+
+        samples.push_back(sample);
     }
 
-    if (centers.empty())
+    if (samples.empty())
     {
         FALCOR_THROW("Path CSV '{}' did not contain any sample centers.", path.string());
     }
 
-    return centers;
+    return samples;
 }
 
 int runMain(int argc, char** argv)
@@ -540,7 +665,6 @@ int main(int argc, char** argv)
 {
     return catchAndReportAllExceptions([&]() { return runMain(argc, argv); });
 }
-
 
 
 

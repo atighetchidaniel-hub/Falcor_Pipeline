@@ -12,6 +12,11 @@ cbuffer PVVCB
     float3 gViewCellCenter;
     float gViewCellRadius;
     uint gSampleCount;
+    uint gUseCameraFrustum;
+    float gCameraFovYRadians;
+    float gCameraAspectRatio;
+    float3 gCameraForward;
+    uint gPadding0;
 };
 
 float3 getSampleOffset(uint sampleIndex)
@@ -29,6 +34,31 @@ float3 getSampleOffset(uint sampleIndex)
     case 7: return float3( r,  r, 0);
     default: return float3(-r, -r, 0);
     }
+}
+
+bool isInsideCameraFrustum(float3 origin, float3 voxelWorld)
+{
+    if (gUseCameraFrustum == 0u) return true;
+
+    float3 toVoxel = voxelWorld - origin;
+    float distance = length(toVoxel);
+    if (distance <= 0.001f) return false;
+
+    float3 forward = normalize(gCameraForward);
+    float3 dir = toVoxel / distance;
+    float depth = dot(dir, forward);
+    if (depth <= 0.0f) return false;
+
+    float3 upHint = abs(forward.y) > 0.98f ? float3(0, 0, 1) : float3(0, 1, 0);
+    float3 right = normalize(cross(upHint, forward));
+    float3 up = cross(forward, right);
+
+    float tanHalfY = tan(0.5f * gCameraFovYRadians);
+    float tanHalfX = tanHalfY * gCameraAspectRatio;
+    float horizontal = abs(dot(dir, right) / depth);
+    float vertical = abs(dot(dir, up) / depth);
+
+    return horizontal <= tanHalfX && vertical <= tanHalfY;
 }
 
 [numthreads(4, 4, 4)]
@@ -58,6 +88,7 @@ void main(uint3 id : SV_DispatchThreadID)
             float3 toVoxel = voxelWorld - origin;
             float distance = length(toVoxel);
             if (distance <= 0.001f) continue;
+            if (!isInsideCameraFrustum(origin, voxelWorld)) continue;
 
             Ray ray = Ray(origin, toVoxel / distance, 0.01f, distance * 0.98f);
             visible = rayQuery.traceVisibilityRay(ray);

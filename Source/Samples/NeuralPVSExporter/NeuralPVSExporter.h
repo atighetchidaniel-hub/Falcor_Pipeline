@@ -27,6 +27,14 @@ public:
     void onHotReload(HotReloadFlags reloaded) override;
 
 private:
+    struct ExportSample
+    {
+        float3 center = float3(0.f);
+        float3 forward = float3(0.f, 0.f, -1.f);
+        float fovYDegrees = 60.f;
+        bool hasCamera = false;
+    };
+
     void loadScene(const std::filesystem::path& path);
     void createResources();
     void createGVPass();
@@ -45,7 +53,7 @@ private:
         const std::string& label,
         uint32_t index
     );
-    std::vector<float3> loadPathCenters(const std::filesystem::path& path) const;
+    std::vector<ExportSample> loadPathSamples(const std::filesystem::path& path) const;
 
     uint32_t mVolumeSize = 256;
     uint32_t mVolumeDepth = 256;
@@ -68,6 +76,8 @@ private:
 
     uint32_t mSamplingMode = 0; // 0 = grid, 1 = path CSV
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_path.csv";
+    uint32_t mVisibilityMode = 0; // 0 = view cell, 1 = camera frustum
+    float mCameraAspectRatio = 1.777778f;
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
