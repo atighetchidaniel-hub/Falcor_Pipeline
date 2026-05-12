@@ -1,8 +1,10 @@
 #include "NeuralPVSExporter.h"
+#include "Utils/Math/FalcorMath.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -146,6 +148,7 @@ void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
 {
     loadScene(mScenePath);
     createResources();
+    createPreviewPass();
     createGVPass();
     createPVVPass();
 }
@@ -157,6 +160,11 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
 {
     const float4 clearColor(0.08f, 0.10f, 0.12f, 1.0f);
     pRenderContext->clearFbo(pTargetFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::All);
+
+    if (mRenderScenePreview)
+    {
+        renderPreview(pRenderContext, pTargetFbo);
+    }
 }
 
 void NeuralPVSExporter::onGuiRender(Gui* pGui)
@@ -212,6 +220,38 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         }
     }
 
+    {
+        auto group = w.group("Path Preview", true);
+        if (group)
+        {
+            w.checkbox("Render scene preview", mRenderScenePreview);
+            w.checkbox("Play path", mPreviewPlayback);
+            w.var("Playback FPS", mPreviewFps, 0.5f, 60.0f, 0.5f);
+
+            const uint32_t maxPreviewIndex = mPreviewSamples.empty() ? 0u : uint32_t(mPreviewSamples.size() - 1u);
+            w.var("Preview sample", mPreviewSampleIndex, 0u, maxPreviewIndex);
+
+            if (w.button("Load Path Preview"))
+            {
+                loadPreviewPath();
+            }
+            if (w.button("Previous sample") && !mPreviewSamples.empty())
+            {
+                mPreviewPlayback = false;
+                mPreviewSampleIndex = mPreviewSampleIndex == 0u ? maxPreviewIndex : mPreviewSampleIndex - 1u;
+                applyPreviewSample();
+            }
+            if (w.button("Next sample") && !mPreviewSamples.empty())
+            {
+                mPreviewPlayback = false;
+                mPreviewSampleIndex = (mPreviewSampleIndex + 1u) % (maxPreviewIndex + 1u);
+                applyPreviewSample();
+            }
+
+            w.text("Preview samples: " + std::to_string(mPreviewSamples.size()));
+        }
+    }
+
     w.separator();
 
     if (w.button("Load Scene"))
@@ -221,6 +261,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
         loadScene(mScenePath);
         createResources();
+        createPreviewPass();
         createGVPass();
         createPVVPass();
 
@@ -234,6 +275,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
         loadScene(mScenePath);
         createResources();
+        createPreviewPass();
         createGVPass();
         createPVVPass();
 
@@ -246,8 +288,16 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     w.text("Output: " + (mOutputRoot / mDatasetName).string());
     w.text(mLastExportStatus);
 }
-bool NeuralPVSExporter::onKeyEvent(const KeyboardEvent& keyEvent) { return false; }
-bool NeuralPVSExporter::onMouseEvent(const MouseEvent& mouseEvent) { return false; }
+bool NeuralPVSExporter::onKeyEvent(const KeyboardEvent& keyEvent)
+{
+    return mpScene && !mPreviewPlayback && mpScene->onKeyEvent(keyEvent);
+}
+
+bool NeuralPVSExporter::onMouseEvent(const MouseEvent& mouseEvent)
+{
+    return mpScene && !mPreviewPlayback && mpScene->onMouseEvent(mouseEvent);
+}
+
 void NeuralPVSExporter::onHotReload(HotReloadFlags reloaded) {}
 
 void NeuralPVSExporter::loadScene(const std::filesystem::path& path)
@@ -283,6 +333,16 @@ void NeuralPVSExporter::createResources()
     mpGVFbo = Fbo::create2D(getDevice(), mRasterWidth, mRasterHeight, desc);
 }
 
+void NeuralPVSExporter::createPreviewPass()
+{
+    ProgramDesc desc;
+    desc.addShaderModules(mpScene->getShaderModules());
+    desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSPreview.3d.slang").vsEntry("vsMain").psEntry("psMain");
+    desc.addTypeConformances(mpScene->getTypeConformances());
+
+    mpPreviewPass = RasterPass::create(getDevice(), desc, mpScene->getSceneDefines());
+}
+
 void NeuralPVSExporter::createGVPass()
 {
     ProgramDesc desc;
@@ -306,6 +366,72 @@ void NeuralPVSExporter::createPVVPass()
     desc.addTypeConformances(mpScene->getTypeConformances());
 
     mpPVVPass = ComputePass::create(getDevice(), desc, mpScene->getSceneDefines());
+}
+
+void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
+{
+    if (!mpScene || !mpPreviewPass || !mpCamera)
+        return;
+
+    if (pTargetFbo->getHeight() > 0)
+    {
+        mpCamera->setAspectRatio(float(pTargetFbo->getWidth()) / float(pTargetFbo->getHeight()));
+    }
+
+    if (!mPreviewSamples.empty())
+    {
+        if (mPreviewPlayback)
+        {
+            mPreviewAccumulator += getGlobalClock().getDelta();
+            const double frameSeconds = 1.0 / std::max(0.5f, mPreviewFps);
+            while (mPreviewAccumulator >= frameSeconds)
+            {
+                mPreviewSampleIndex = (mPreviewSampleIndex + 1u) % uint32_t(mPreviewSamples.size());
+                mPreviewAccumulator -= frameSeconds;
+            }
+        }
+
+        applyPreviewSample();
+    }
+
+    IScene::UpdateFlags updates = mpScene->update(pRenderContext, getGlobalClock().getTime());
+    if (is_set(updates, IScene::UpdateFlags::RecompileNeeded))
+    {
+        FALCOR_THROW("Scene update requires shader recompilation. Reload the scene.");
+    }
+
+    mpPreviewPass->getState()->setFbo(pTargetFbo);
+    mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
+}
+
+void NeuralPVSExporter::loadPreviewPath()
+{
+    mPreviewSamples = loadPathSamples(std::filesystem::path(mPathCsvText));
+    mPreviewSampleIndex = 0;
+    mPreviewAccumulator = 0.0;
+    applyPreviewSample();
+    mLastExportStatus = "Loaded " + std::to_string(mPreviewSamples.size()) + " preview path samples.";
+}
+
+void NeuralPVSExporter::applyPreviewSample()
+{
+    if (!mpCamera || mPreviewSamples.empty())
+        return;
+
+    mPreviewSampleIndex = std::min(mPreviewSampleIndex, uint32_t(mPreviewSamples.size() - 1u));
+    const ExportSample& sample = mPreviewSamples[mPreviewSampleIndex];
+
+    const float3 forward = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
+    const float3 upHint = std::abs(forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
+    const float3 right = normalizedOrDefault(cross(upHint, forward), float3(1.f, 0.f, 0.f));
+    const float3 up = normalizedOrDefault(cross(forward, right), upHint);
+
+    mpCamera->setPosition(sample.center);
+    mpCamera->setTarget(sample.center + forward);
+    mpCamera->setUpVector(up);
+
+    const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
+    mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
 }
 
 void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
@@ -665,8 +791,6 @@ int main(int argc, char** argv)
 {
     return catchAndReportAllExceptions([&]() { return runMain(argc, argv); });
 }
-
-
 
 
 

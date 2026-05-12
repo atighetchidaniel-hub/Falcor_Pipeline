@@ -37,8 +37,12 @@ private:
 
     void loadScene(const std::filesystem::path& path);
     void createResources();
+    void createPreviewPass();
     void createGVPass();
     void createPVVPass();
+    void renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+    void loadPreviewPath();
+    void applyPreviewSample();
     void exportSceneVolumes(RenderContext* pRenderContext);
     void writeVolumePair(
         const std::vector<uint8_t>& gvBytes,
@@ -79,8 +83,16 @@ private:
     uint32_t mVisibilityMode = 0; // 0 = view cell, 1 = camera frustum
     float mCameraAspectRatio = 1.777778f;
 
+    bool mRenderScenePreview = true;
+    bool mPreviewPlayback = false;
+    float mPreviewFps = 12.f;
+    uint32_t mPreviewSampleIndex = 0;
+    double mPreviewAccumulator = 0.0;
+    std::vector<ExportSample> mPreviewSamples;
+
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
+    ref<RasterPass> mpPreviewPass;
     ref<RasterPass> mpGVPass;
     ref<ComputePass> mpPVVPass;
     ref<Texture> mpGVVolume;

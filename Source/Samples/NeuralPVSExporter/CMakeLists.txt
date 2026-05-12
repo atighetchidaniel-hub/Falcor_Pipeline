@@ -3,6 +3,7 @@
 target_sources(NeuralPVSExporter PRIVATE
     NeuralPVSExporter.cpp
     NeuralPVSExporter.h
+    NeuralPVSPreview.3d.slang
     NeuralPVSGV.3d.slang
     NeuralPVSPVV.cs.slang
 )
