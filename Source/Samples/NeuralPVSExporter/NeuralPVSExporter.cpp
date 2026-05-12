@@ -115,6 +115,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         auto group = w.group("Sampling", true);
         if (group)
         {
+            Gui::DropdownList samplingModes = {
+                {0, "Grid"},
+                {1, "Path CSV"},
+            };
+            w.dropdown("Sampling mode", samplingModes, mSamplingMode);
+            w.textbox("Path CSV", mPathCsvText);
+
             w.var("Samples per axis", mSamplesPerAxis, 1u, 16u);
             w.var("Volume extent scale", mVolumeExtentScale, 0.05f, 2.0f, 0.01f);
             w.var("Sample step scale", mSampleStepScale, 0.001f, 0.5f, 0.001f);
@@ -237,22 +244,28 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
 
     const float3 volumeExtent = sceneExtent * mVolumeExtentScale;
     const float viewCellRadius = std::max(0.1f, sceneBounds.radius() * 0.02f);
-    const uint32_t samplesPerAxis = mSamplesPerAxis < 1u ? 1u : mSamplesPerAxis;
+    const float3 sampleStep = sceneExtent * mSampleStepScale;
 
     std::vector<float3> centers;
-    centers.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
-
-    const float3 sampleStep = sceneExtent * mSampleStepScale;
-    const float centerOffset = 0.5f * float(samplesPerAxis - 1u);
-
-    for (uint32_t z = 0; z < samplesPerAxis; ++z)
+    if (mSamplingMode == 1)
     {
-        for (uint32_t y = 0; y < samplesPerAxis; ++y)
+        centers = loadPathCenters(std::filesystem::path(mPathCsvText));
+    }
+    else
+    {
+        const uint32_t samplesPerAxis = mSamplesPerAxis < 1u ? 1u : mSamplesPerAxis;
+        centers.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
+
+        const float centerOffset = 0.5f * float(samplesPerAxis - 1u);
+        for (uint32_t z = 0; z < samplesPerAxis; ++z)
         {
-            for (uint32_t x = 0; x < samplesPerAxis; ++x)
+            for (uint32_t y = 0; y < samplesPerAxis; ++y)
             {
-                const float3 offset = float3(float(x) - centerOffset, float(y) - centerOffset, float(z) - centerOffset);
-                centers.push_back(sceneCenter + offset * sampleStep);
+                for (uint32_t x = 0; x < samplesPerAxis; ++x)
+                {
+                    const float3 offset = float3(float(x) - centerOffset, float(y) - centerOffset, float(z) - centerOffset);
+                    centers.push_back(sceneCenter + offset * sampleStep);
+                }
             }
         }
     }
@@ -340,6 +353,8 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
     metadata << "{\n";
     metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
     metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
+    metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
+    metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
     metadata << "  \"sample_count\": " << centers.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
@@ -464,6 +479,51 @@ void NeuralPVSExporter::writeDebugProjections(
     writePgm(makeName("xy"), xy, mVolumeSize, mVolumeSize);
     writePgm(makeName("xz"), xz, mVolumeSize, mVolumeDepth);
     writePgm(makeName("yz"), yz, mVolumeSize, mVolumeDepth);
+}
+
+std::vector<float3> NeuralPVSExporter::loadPathCenters(const std::filesystem::path& path) const
+{
+    std::ifstream file(path);
+    if (!file)
+    {
+        FALCOR_THROW("Failed to open path CSV '{}'.", path.string());
+    }
+
+    std::vector<float3> centers;
+    std::string line;
+
+    while (std::getline(file, line))
+    {
+        if (line.empty())
+            continue;
+        if (line[0] == '#')
+            continue;
+        if (line.find('x') != std::string::npos && line.find('y') != std::string::npos && line.find('z') != std::string::npos)
+            continue;
+
+        std::replace(line.begin(), line.end(), ';', ',');
+        std::stringstream stream(line);
+
+        std::string sx;
+        std::string sy;
+        std::string sz;
+
+        if (!std::getline(stream, sx, ','))
+            continue;
+        if (!std::getline(stream, sy, ','))
+            continue;
+        if (!std::getline(stream, sz, ','))
+            continue;
+
+        centers.push_back(float3(std::stof(sx), std::stof(sy), std::stof(sz)));
+    }
+
+    if (centers.empty())
+    {
+        FALCOR_THROW("Path CSV '{}' did not contain any sample centers.", path.string());
+    }
+
+    return centers;
 }
 
 int runMain(int argc, char** argv)

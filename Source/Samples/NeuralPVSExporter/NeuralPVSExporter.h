@@ -45,6 +45,7 @@ private:
         const std::string& label,
         uint32_t index
     );
+    std::vector<float3> loadPathCenters(const std::filesystem::path& path) const;
 
     uint32_t mVolumeSize = 256;
     uint32_t mVolumeDepth = 256;
@@ -64,6 +65,9 @@ private:
     float mSampleStepScale = 0.05f;
     uint32_t mExportMode = 2; // 0 = GV only, 1 = PVV only, 2 = GV + PVV, 3 = metadata only
     bool mWriteDebugProjections = false;
+
+    uint32_t mSamplingMode = 0; // 0 = grid, 1 = path CSV
+    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_path.csv";
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
