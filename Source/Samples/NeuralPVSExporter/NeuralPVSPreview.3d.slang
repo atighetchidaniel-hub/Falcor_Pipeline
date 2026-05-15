@@ -4,6 +4,7 @@ Texture3D<uint> gRenderPVVVolume;
 
 cbuffer PreviewCB
 {
+    float4x4 gMainCamViewProj;
     float3 gRenderPVVVolumeMin;
     uint gRenderPVVVolumeSize;
     float3 gRenderPVVVolumeExtent;
@@ -11,7 +12,7 @@ cbuffer PreviewCB
     uint gEnableRenderPVV;
     uint gPVVFilter;
     uint gRenderPVVSource;
-    uint gPreviewPadding0;
+    uint gKeepOutsidePVVInView;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -42,6 +43,18 @@ bool loadPVVBitClamped(int3 voxel)
     return loadPVVBit(uint3(uint(voxel.x), uint(voxel.y), uint(voxel.z)));
 }
 
+bool isInsideMainCameraFrustum(float3 worldPos)
+{
+    float4 clip = mul(gMainCamViewProj, float4(worldPos, 1.0f));
+    if (clip.w <= 0.0f)
+        return false;
+
+    float3 ndc = clip.xyz / clip.w;
+    return ndc.x >= -1.0f && ndc.x <= 1.0f &&
+           ndc.y >= -1.0f && ndc.y <= 1.0f &&
+           ndc.z >= 0.0f && ndc.z <= 1.0f;
+}
+
 bool isVisibleInPVV(float3 worldPos)
 {
     if (gEnableRenderPVV == 0u)
@@ -49,7 +62,7 @@ bool isVisibleInPVV(float3 worldPos)
 
     float3 p = (worldPos - gRenderPVVVolumeMin) / gRenderPVVVolumeExtent;
     if (any(p < 0.0f) || any(p > 1.0f))
-        return false;
+        return gKeepOutsidePVVInView != 0u && isInsideMainCameraFrustum(worldPos);
 
     float3 gridPos = p * float3(float(gRenderPVVVolumeSize), float(gRenderPVVVolumeSize), float(gRenderPVVVolumeDepth));
     uint x = min((uint)floor(gridPos.x), gRenderPVVVolumeSize - 1u);

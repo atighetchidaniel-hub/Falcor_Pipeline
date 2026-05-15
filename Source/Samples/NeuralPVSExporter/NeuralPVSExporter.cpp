@@ -356,6 +356,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
             w.var("Sample", mRenderSampleIndex, 0u, maxRenderIndex);
             w.checkbox("Cull scene with PVV", mRenderPVVCullScene);
+            w.checkbox("Keep outside PVV if in view", mRenderKeepOutsidePVVInView);
             w.checkbox("Render volume overlay", mRenderPVVOverlay);
             w.checkbox("Use sample camera", mRenderUseSampleCamera);
             w.var("Overlay opacity", mRenderOpacity, 0.01f, 1.0f, 0.01f);
@@ -606,6 +607,8 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     previewRoot["PreviewCB"]["gEnableRenderPVV"] = enableRenderPVV;
     previewRoot["PreviewCB"]["gPVVFilter"] = mRenderPVVFilter;
     previewRoot["PreviewCB"]["gRenderPVVSource"] = mRenderVolumeSource;
+    previewRoot["PreviewCB"]["gKeepOutsidePVVInView"] = mRenderKeepOutsidePVVInView ? 1u : 0u;
+    previewRoot["PreviewCB"]["gMainCamViewProj"] = mpCamera->getViewProjMatrix();
 
     mpPreviewPass->getState()->setFbo(pTargetFbo);
     mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
@@ -813,6 +816,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     loadRenderMetadata();
 
     mRenderPVVCullScene = true;
+    mRenderKeepOutsidePVVInView = true;
     mRenderPVVOverlay = false;
     mRenderUseSampleCamera = true;
     mRenderScenePreview = true;

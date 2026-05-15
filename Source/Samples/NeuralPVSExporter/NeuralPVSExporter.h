@@ -134,6 +134,7 @@ private:
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
     bool mRenderPVVCullScene = false;
+    bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;
     bool mRenderUseSampleCamera = true;
     float mRenderOpacity = 0.55f;
