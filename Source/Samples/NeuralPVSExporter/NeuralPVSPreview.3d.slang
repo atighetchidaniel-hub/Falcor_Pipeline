@@ -144,8 +144,9 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
     float3 n = normalize(vsOut.normalW);
     float3 lightDir = normalize(float3(-0.35f, 0.7f, -0.55f));
-    float shade = saturate(dot(n, lightDir)) * 0.75f + 0.18f;
-    float3 normalTint = abs(n) * 0.25f;
+    float shade = saturate(dot(n, lightDir)) * 0.75f + 0.22f;
+    float3 baseColor = float3(0.56f, 0.56f, 0.52f);
+    float3 color = baseColor * shade + float3(0.035f, 0.035f, 0.035f);
 
-    return float4(float3(shade, shade, shade) + normalTint, 1.0f);
+    return float4(color, 1.0f);
 }

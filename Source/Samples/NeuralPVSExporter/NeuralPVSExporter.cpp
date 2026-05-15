@@ -1596,6 +1596,9 @@ void NeuralPVSExporter::writeVolumePair(
     if (mExportMode == 1 || mExportMode == 2)
     {
         writeVolumeFile(datasetRoot / "pvv" / fourDigitName(index, "_pvv.bin.gz"), pvvBytes);
+
+        const std::filesystem::path predictedRoot = std::filesystem::path(mPredictedPVVRootText);
+        writeVolumeFile(predictedRoot / (std::to_string(index) + "_predicted_pvv.bin.gz"), pvvBytes);
     }
 }
 
