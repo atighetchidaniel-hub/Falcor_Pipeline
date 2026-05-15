@@ -60,7 +60,7 @@ private:
     void applyPreviewSample();
     void loadRenderMetadata();
     void loadRenderVolume();
-    void ensureRenderVolumeLoaded(bool forceReload);
+    bool ensureRenderVolumeLoaded(bool forceReload);
     bool isModeRunning() const;
     void startSelectedMode();
     void stopCurrentMode();
