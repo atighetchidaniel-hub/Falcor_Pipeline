@@ -271,6 +271,11 @@ void NeuralPVSExporter::onResize(uint32_t width, uint32_t height) {}
 
 void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
 {
+    if (mStopRequested)
+    {
+        stopCurrentMode();
+    }
+
     const float4 clearColor(0.08f, 0.10f, 0.12f, 1.0f);
     pRenderContext->clearFbo(pTargetFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::All);
 
@@ -355,11 +360,32 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                     w.text("Frame output: " + getRenderFrameOutputPath().string());
                 else
                     w.text("Video output: " + getRenderVideoOutputPath().string());
+
+                if (mRenderFrameExportMode == 1 && w.button("Encode captured video"))
+                {
+                    if (isModeRunning())
+                    {
+                        mRenderStatus = "Stop RenderPVV before encoding video.";
+                        mLastExportStatus = mRenderStatus;
+                    }
+                    else
+                    {
+                        if (!mRenderVideoFramesReady)
+                        {
+                            mRenderStatus = "No captured video frames are ready yet. Run RenderPVV with Export frames first.";
+                            mLastExportStatus = mRenderStatus;
+                        }
+                        else
+                        {
+                            encodeRenderVideo("RenderPVV encoded.");
+                        }
+                    }
+                }
             }
 
             Gui::DropdownList pvvFilters = {
                 {1, "None"},
-                {2, "Box"},
+                {2, "Box (recommended)"},
                 {3, "Trilinear"},
             };
             w.dropdown("RenderPVV filter", pvvFilters, mRenderPVVFilter);
@@ -434,6 +460,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
     if (w.button("Stop"))
     {
+        mStopRequested = true;
         stopCurrentMode();
     }
 
@@ -450,6 +477,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 }
 bool NeuralPVSExporter::onKeyEvent(const KeyboardEvent& keyEvent)
 {
+    if (keyEvent.key == Input::Key::Escape && keyEvent.type == KeyboardEvent::Type::KeyPressed && isModeRunning())
+    {
+        mStopRequested = true;
+        stopCurrentMode();
+        return true;
+    }
+
     return mpScene && !mPreviewPlayback && mpScene->onKeyEvent(keyEvent);
 }
 
@@ -987,6 +1021,8 @@ void NeuralPVSExporter::startSelectedMode()
         mRenderPVVOverlay = false;
         mRenderLastCapturedSampleIndex = 0xffffffffu;
         mRenderCapturedFrameCount = 0;
+        mRenderVideoFramesReady = false;
+        mStopRequested = false;
 
         loadScene(mScenePath);
         createResources();
@@ -1019,6 +1055,8 @@ void NeuralPVSExporter::startSelectedMode()
 
 void NeuralPVSExporter::stopCurrentMode()
 {
+    mStopRequested = false;
+
     const bool wasProgressiveExport = mProgressiveExportActive;
     const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
     const bool wasPathPlayback = mPreviewPlayback;
@@ -1035,6 +1073,7 @@ void NeuralPVSExporter::stopCurrentMode()
     if (wasRenderPVV && mRenderFrameExportMode == 1u)
     {
         removeDirectoryQuietly(getRenderFrameStagingPath());
+        mRenderVideoFramesReady = false;
     }
 
     if (wasProgressiveExport)
@@ -1072,6 +1111,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     mRenderSampleIndex = 0;
     mRenderLastCapturedSampleIndex = 0xffffffffu;
     mRenderCapturedFrameCount = 0;
+    mRenderVideoFramesReady = false;
     mRenderPVVFinished = false;
     mPreviewSamples = mRenderSamples;
     mPreviewSampleIndex = 0;
@@ -1167,6 +1207,9 @@ std::filesystem::path NeuralPVSExporter::getRenderVideoOutputPath() const
 
 void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
 {
+    if (mStopRequested || !mRenderPVVActive)
+        return;
+
     if (!pTargetFbo || mRenderSamples.empty() || mRenderSampleIndex >= mRenderSamples.size())
         return;
 
@@ -1203,7 +1246,11 @@ void NeuralPVSExporter::finishRenderPVVMode()
 
     if (mRenderExportFrames && mRenderFrameExportMode == 1u)
     {
-        encodeRenderVideo("RenderPVV finished.");
+        mRenderVideoFramesReady = true;
+        mRenderStatus =
+            "RenderPVV finished at sample " + std::to_string(mPreviewSampleIndex) +
+            ". Captured frames are staged. Click 'Encode captured video' to write " + getRenderVideoOutputPath().string();
+        mLastExportStatus = mRenderStatus;
         return;
     }
 
@@ -1235,6 +1282,7 @@ void NeuralPVSExporter::encodeRenderVideo(const std::string& completionPrefix)
     if (result == 0)
     {
         removeDirectoryQuietly(getRenderFrameStagingPath());
+        mRenderVideoFramesReady = false;
         mRenderStatus =
             completionPrefix + " Lossless video saved to " + videoPath.string() + ".";
     }
@@ -1252,6 +1300,7 @@ void NeuralPVSExporter::encodeRenderVideo(const std::string& completionPrefix)
         if (result == 0)
         {
             removeDirectoryQuietly(getRenderFrameStagingPath());
+            mRenderVideoFramesReady = false;
             mRenderStatus =
                 completionPrefix + " Lossless video saved to " + videoPath.string() +
                 " using FFV1 fallback.";

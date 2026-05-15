@@ -156,7 +156,7 @@ private:
     std::string mPredictedPVVRootText;
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
-    uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = box, 3 = conservative trilinear
+    uint32_t mRenderPVVFilter = 2; // 1 = none/exact, 2 = box, 3 = conservative trilinear
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
@@ -167,6 +167,7 @@ private:
     bool mRenderExportFrames = false;
     uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
     bool mRenderPVVActive = false;
+    bool mStopRequested = false;
     bool mRenderPVVCullScene = false;
     bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;
@@ -181,6 +182,7 @@ private:
     uint32_t mRenderLoadedVolumeSource = 0xffffffffu;
     uint32_t mRenderLastCapturedSampleIndex = 0xffffffffu;
     uint32_t mRenderCapturedFrameCount = 0;
+    bool mRenderVideoFramesReady = false;
     bool mRenderPVVFinished = false;
     std::filesystem::path mRenderLoadedVolumePath;
 

@@ -1,4 +1,6 @@
 import Scene.Raster;
+import Utils.Sampling.TinyUniformSampleGenerator;
+import Rendering.Lights.LightHelpers;
 
 Texture3D<uint> gRenderPVVVolume;
 
@@ -139,14 +141,32 @@ bool isVisibleInPVV(float3 worldPos)
 
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
+    let lod = ImplicitLodTextureSampler();
+    if (alphaTest(vsOut, triangleIndex, lod))
+        discard;
+
     if (!isVisibleInPVV(vsOut.posW))
         discard;
 
-    float3 n = normalize(vsOut.normalW);
-    float3 lightDir = normalize(float3(-0.35f, 0.7f, -0.55f));
-    float shade = saturate(dot(n, lightDir)) * 0.75f + 0.22f;
-    float3 baseColor = float3(0.56f, 0.56f, 0.52f);
-    float3 color = baseColor * shade + float3(0.035f, 0.035f, 0.035f);
+    float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
+    ShadingData sd = prepareShadingData(vsOut, triangleIndex, viewDir);
+    let mi = gScene.materials.getMaterialInstance(sd, lod);
+    let props = mi.getProperties(sd);
 
-    return float4(color, 1.0f);
+    float3 baseColor = max(props.diffuseReflectionAlbedo + props.diffuseTransmissionAlbedo, float3(0.04f));
+    float3 n = normalize(sd.frame.N);
+    float3 lightDir = normalize(float3(-0.35f, 0.7f, -0.55f));
+    float fallbackShade = saturate(dot(n, lightDir)) * 0.65f + 0.18f;
+    float3 color = props.emission + baseColor * fallbackShade;
+
+    uint2 pixel = uint2(vsOut.posH.xy);
+    TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(pixel, 0);
+    for (int i = 0; i < gScene.getLightCount(); ++i)
+    {
+        AnalyticLightSample ls;
+        if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
+            color += mi.eval(sd, ls.dir, sg) * ls.Li;
+    }
+
+    return float4(saturate(color), 1.0f);
 }
