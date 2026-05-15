@@ -6,6 +6,7 @@ target_sources(NeuralPVSExporter PRIVATE
     NeuralPVSPreview.3d.slang
     NeuralPVSGV.3d.slang
     NeuralPVSPVV.cs.slang
+    NeuralPVSRenderPVV.ps.slang
 )
 
 target_copy_shaders(NeuralPVSExporter Samples/NeuralPVSExporter)

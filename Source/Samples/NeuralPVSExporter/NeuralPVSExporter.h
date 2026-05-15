@@ -1,6 +1,7 @@
 #pragma once
 #include "Falcor.h"
 #include "Core/SampleApp.h"
+#include "Core/Pass/FullScreenPass.h"
 #include "Core/Pass/RasterPass.h"
 #include "Core/Pass/ComputePass.h"
 
@@ -41,8 +42,12 @@ private:
     void createGVPass();
     void createPVVPass();
     void renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+    void createPVVRenderPass();
+    void renderPVVOverlay(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void loadPreviewPath();
     void applyPreviewSample();
+    void loadRenderMetadata();
+    void loadRenderVolume();
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
@@ -83,6 +88,7 @@ private:
         uint32_t index
     );
     std::vector<ExportSample> loadPathSamples(const std::filesystem::path& path) const;
+    std::vector<uint8_t> readGzipStoredFile(const std::filesystem::path& path) const;
 
     uint32_t mVolumeSize = 256;
     uint32_t mVolumeDepth = 256;
@@ -90,9 +96,9 @@ private:
     uint32_t mRasterHeight = 2048;
     uint32_t mExportIndex = 0;
 
-    std::string mScenePathText = "media/Robolab/Robolab.fbx";
+    std::string mScenePathText = "media/RobolabUSD/Robolab.usda";
     std::string mOutputRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets";
-    std::string mDatasetName = "falcor_robolab";
+    std::string mDatasetName = "falcor_robolab_usd_frustum_128";
 
     std::filesystem::path mScenePath = mScenePathText;
     std::filesystem::path mOutputRoot = mOutputRootText;
@@ -103,9 +109,9 @@ private:
     uint32_t mExportMode = 2; // 0 = GV only, 1 = PVV only, 2 = GV + PVV, 3 = metadata only
     bool mWriteDebugProjections = false;
 
-    uint32_t mSamplingMode = 0; // 0 = grid, 1 = path CSV
-    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_path.csv";
-    uint32_t mVisibilityMode = 0; // 0 = view cell, 1 = camera frustum
+    uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
+    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
+    uint32_t mVisibilityMode = 1; // 0 = view cell, 1 = camera frustum
     float mCameraAspectRatio = 1.777778f;
 
     bool mRenderScenePreview = true;
@@ -115,6 +121,20 @@ private:
     uint32_t mPreviewSampleIndex = 0;
     double mPreviewAccumulator = 0.0;
     std::vector<ExportSample> mPreviewSamples;
+
+    std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_robolab_usd_frustum_128";
+    uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV
+    uint32_t mRenderSampleIndex = 0;
+    uint32_t mRenderVolumeSize = 256;
+    uint32_t mRenderVolumeDepth = 256;
+    bool mRenderPVVOverlay = false;
+    bool mRenderUseSampleCamera = true;
+    float mRenderOpacity = 0.55f;
+    float mRenderStepScale = 0.75f;
+    float3 mRenderVolumeExtent = float3(1.f);
+    std::filesystem::path mRenderDatasetRoot;
+    std::vector<ExportSample> mRenderSamples;
+    std::string mRenderStatus = "No render volume loaded.";
 
     bool mProgressiveExportActive = false;
     uint32_t mProgressiveExportIndex = 0;
@@ -134,8 +154,10 @@ private:
     ref<RasterPass> mpPreviewPass;
     ref<RasterPass> mpGVPass;
     ref<ComputePass> mpPVVPass;
+    ref<FullScreenPass> mpPVVRenderPass;
     ref<Texture> mpGVVolume;
     ref<Texture> mpPVVVolume;
+    ref<Texture> mpRenderVolume;
     ref<Fbo> mpGVFbo;
 
     std::string mLastExportStatus = "Not exported yet.";

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 
@@ -69,6 +70,17 @@ namespace
         writeLE32(out, static_cast<uint32_t>(data.size()));
     }
 
+    uint16_t readLE16(const std::vector<uint8_t>& data, size_t offset)
+    {
+        return uint16_t(data[offset]) | (uint16_t(data[offset + 1]) << 8);
+    }
+
+    uint32_t readLE32(const std::vector<uint8_t>& data, size_t offset)
+    {
+        return uint32_t(data[offset]) | (uint32_t(data[offset + 1]) << 8) | (uint32_t(data[offset + 2]) << 16) |
+               (uint32_t(data[offset + 3]) << 24);
+    }
+
     std::string fourDigitName(uint32_t index, const std::string& suffix)
     {
         std::ostringstream oss;
@@ -103,6 +115,53 @@ namespace
         }
 
         return tokens;
+    }
+
+    bool tryParseFloat(const std::string& value, float& parsed);
+
+    std::vector<float> parseFloatArray(const std::string& text)
+    {
+        std::vector<float> values;
+        for (const std::string& token : splitCsvLine(text))
+        {
+            float value = 0.f;
+            if (tryParseFloat(token, value))
+            {
+                values.push_back(value);
+            }
+        }
+        return values;
+    }
+
+    std::vector<float> extractFloatArrayFromLine(const std::string& line, const std::string& key)
+    {
+        const size_t keyPos = line.find(key);
+        if (keyPos == std::string::npos)
+            return {};
+
+        const size_t begin = line.find('[', keyPos);
+        const size_t end = line.find(']', begin);
+        if (begin == std::string::npos || end == std::string::npos || end <= begin)
+            return {};
+
+        return parseFloatArray(line.substr(begin + 1, end - begin - 1));
+    }
+
+    bool extractFloatFromLine(const std::string& line, const std::string& key, float& value)
+    {
+        const size_t keyPos = line.find(key);
+        if (keyPos == std::string::npos)
+            return false;
+
+        const size_t colon = line.find(':', keyPos);
+        if (colon == std::string::npos)
+            return false;
+
+        size_t end = line.find_first_of(",}", colon + 1);
+        if (end == std::string::npos)
+            end = line.size();
+
+        return tryParseFloat(trim(line.substr(colon + 1, end - colon - 1)), value);
     }
 
     bool tryParseFloat(const std::string& value, float& parsed)
@@ -151,6 +210,7 @@ void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
     createPreviewPass();
     createGVPass();
     createPVVPass();
+    createPVVRenderPass();
 }
 
 void NeuralPVSExporter::onShutdown() {}
@@ -172,6 +232,11 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
         renderPreview(pRenderContext, pTargetFbo);
     }
 
+    if (mRenderPVVOverlay)
+    {
+        renderPVVOverlay(pRenderContext, pTargetFbo);
+    }
+
     if (mProgressiveExportActive)
     {
         processProgressiveExportSample(pRenderContext);
@@ -180,7 +245,7 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
 
 void NeuralPVSExporter::onGuiRender(Gui* pGui)
 {
-    Gui::Window w(pGui, "NeuralPVS Exporter", {680, 560}, {20, 40});
+    Gui::Window w(pGui, "NeuralPVS Exporter", {760, 760}, {20, 40});
     renderGlobalUI(pGui);
 
     w.text("NeuralPVS Exporter");
@@ -276,6 +341,49 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         }
     }
 
+    {
+        auto group = w.group("Render PVV", true);
+        if (group)
+        {
+            w.textbox("Dataset root", mRenderDatasetRootText);
+
+            Gui::DropdownList renderKinds = {
+                {0, "GV"},
+                {1, "PVV"},
+            };
+            w.dropdown("Volume", renderKinds, mRenderVolumeKind);
+
+            const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
+            w.var("Sample", mRenderSampleIndex, 0u, maxRenderIndex);
+            w.checkbox("Render volume overlay", mRenderPVVOverlay);
+            w.checkbox("Use sample camera", mRenderUseSampleCamera);
+            w.var("Overlay opacity", mRenderOpacity, 0.01f, 1.0f, 0.01f);
+            w.var("Ray step scale", mRenderStepScale, 0.25f, 4.0f, 0.05f);
+
+            if (w.button("Load Render Metadata"))
+            {
+                loadRenderMetadata();
+            }
+            if (w.button("Load Render Volume"))
+            {
+                loadRenderVolume();
+            }
+            if (w.button("Previous render sample") && !mRenderSamples.empty())
+            {
+                mRenderSampleIndex = mRenderSampleIndex == 0u ? maxRenderIndex : mRenderSampleIndex - 1u;
+                loadRenderVolume();
+            }
+            if (w.button("Next render sample") && !mRenderSamples.empty())
+            {
+                mRenderSampleIndex = (mRenderSampleIndex + 1u) % (maxRenderIndex + 1u);
+                loadRenderVolume();
+            }
+
+            w.text("Render samples: " + std::to_string(mRenderSamples.size()));
+            w.text(mRenderStatus);
+        }
+    }
+
     w.separator();
 
     if (w.button("Load Scene"))
@@ -288,6 +396,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createPreviewPass();
         createGVPass();
         createPVVPass();
+        createPVVRenderPass();
 
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
     }
@@ -302,6 +411,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createPreviewPass();
         createGVPass();
         createPVVPass();
+        createPVVRenderPass();
 
         if (mPreviewWhileExporting)
         {
@@ -399,6 +509,23 @@ void NeuralPVSExporter::createPVVPass()
     mpPVVPass = ComputePass::create(getDevice(), desc, mpScene->getSceneDefines());
 }
 
+void NeuralPVSExporter::createPVVRenderPass()
+{
+    mpPVVRenderPass = FullScreenPass::create(getDevice(), "Samples/NeuralPVSExporter/NeuralPVSRenderPVV.ps.slang");
+
+    BlendState::Desc blendDesc;
+    blendDesc.setRtBlend(0, true).setRtParams(
+        0,
+        BlendState::BlendOp::Add,
+        BlendState::BlendOp::Add,
+        BlendState::BlendFunc::SrcAlpha,
+        BlendState::BlendFunc::OneMinusSrcAlpha,
+        BlendState::BlendFunc::One,
+        BlendState::BlendFunc::One
+    );
+    mpPVVRenderPass->getState()->setBlendState(BlendState::create(blendDesc));
+}
+
 void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
 {
     if (!mpScene || !mpPreviewPass || !mpCamera)
@@ -435,6 +562,36 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
 }
 
+void NeuralPVSExporter::renderPVVOverlay(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
+{
+    if (!mpPVVRenderPass || !mpRenderVolume || !mpCamera || mRenderSamples.empty())
+        return;
+
+    if (pTargetFbo->getHeight() > 0)
+    {
+        mpCamera->setAspectRatio(float(pTargetFbo->getWidth()) / float(pTargetFbo->getHeight()));
+    }
+
+    mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    const ExportSample& sample = mRenderSamples[mRenderSampleIndex];
+    const float3 volumeMin = sample.center - mRenderVolumeExtent * 0.5f;
+
+    auto root = mpPVVRenderPass->getRootVar();
+    root["gVolume"] = mpRenderVolume;
+    root["RenderCB"]["gInvViewProj"] = mpCamera->getInvViewProjMatrix();
+    root["RenderCB"]["gCameraPos"] = mpCamera->getPosition();
+    root["RenderCB"]["gVolumeMin"] = volumeMin;
+    root["RenderCB"]["gVolumeSize"] = mRenderVolumeSize;
+    root["RenderCB"]["gVolumeExtent"] = mRenderVolumeExtent;
+    root["RenderCB"]["gVolumeDepth"] = mRenderVolumeDepth;
+    root["RenderCB"]["gSampleCenter"] = sample.center;
+    root["RenderCB"]["gOpacity"] = std::clamp(mRenderOpacity, 0.01f, 1.0f);
+    root["RenderCB"]["gStepScale"] = std::clamp(mRenderStepScale, 0.25f, 4.0f);
+    root["RenderCB"]["gVolumeKind"] = mRenderVolumeKind;
+
+    mpPVVRenderPass->execute(pRenderContext, pTargetFbo);
+}
+
 void NeuralPVSExporter::loadPreviewPath()
 {
     mPreviewSamples = loadPathSamples(std::filesystem::path(mPathCsvText));
@@ -463,6 +620,127 @@ void NeuralPVSExporter::applyPreviewSample()
 
     const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
+}
+
+void NeuralPVSExporter::loadRenderMetadata()
+{
+    mRenderDatasetRoot = std::filesystem::path(mRenderDatasetRootText);
+    const std::filesystem::path metadataPath = mRenderDatasetRoot / "metadata.json";
+
+    std::ifstream metadata(metadataPath);
+    if (!metadata)
+    {
+        FALCOR_THROW("Failed to open render metadata '{}'.", metadataPath.string());
+    }
+
+    std::vector<ExportSample> samples;
+    float3 volumeExtent = float3(1.f);
+    uint32_t volumeSize = mVolumeSize;
+    uint32_t volumeDepth = mVolumeDepth;
+
+    std::string line;
+    while (std::getline(metadata, line))
+    {
+        std::vector<float> volumeSizeValues = extractFloatArrayFromLine(line, "\"volume_size\"");
+        if (volumeSizeValues.size() >= 3)
+        {
+            volumeSize = std::max(1u, uint32_t(std::round(volumeSizeValues[0])));
+            volumeDepth = std::max(1u, uint32_t(std::round(volumeSizeValues[2])));
+        }
+
+        std::vector<float> volumeExtentValues = extractFloatArrayFromLine(line, "\"volume_extent\"");
+        if (volumeExtentValues.size() >= 3)
+        {
+            volumeExtent = float3(volumeExtentValues[0], volumeExtentValues[1], volumeExtentValues[2]);
+        }
+
+        std::vector<float> centerValues = extractFloatArrayFromLine(line, "\"center\"");
+        if (centerValues.size() >= 3)
+        {
+            ExportSample sample;
+            sample.center = float3(centerValues[0], centerValues[1], centerValues[2]);
+            sample.hasCamera = line.find("\"has_camera\": true") != std::string::npos;
+
+            std::vector<float> forwardValues = extractFloatArrayFromLine(line, "\"forward\"");
+            if (forwardValues.size() >= 3)
+            {
+                sample.forward = normalizedOrDefault(float3(forwardValues[0], forwardValues[1], forwardValues[2]), float3(0.f, 0.f, -1.f));
+                sample.hasCamera = true;
+            }
+
+            float fovYDegrees = sample.fovYDegrees;
+            if (extractFloatFromLine(line, "\"fov_y_degrees\"", fovYDegrees))
+            {
+                sample.fovYDegrees = fovYDegrees;
+            }
+
+            samples.push_back(sample);
+        }
+    }
+
+    if (samples.empty())
+    {
+        FALCOR_THROW("Render metadata '{}' did not contain any samples.", metadataPath.string());
+    }
+
+    if (volumeSize % 32u != 0u)
+    {
+        FALCOR_THROW("Render volume size {} must be divisible by 32.", volumeSize);
+    }
+
+    mRenderSamples = std::move(samples);
+    mRenderVolumeExtent = volumeExtent;
+    mRenderVolumeSize = volumeSize;
+    mRenderVolumeDepth = volumeDepth;
+    mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    mRenderStatus = "Loaded metadata with " + std::to_string(mRenderSamples.size()) + " samples.";
+    mLastExportStatus = mRenderStatus;
+}
+
+void NeuralPVSExporter::loadRenderVolume()
+{
+    const std::filesystem::path requestedRoot = std::filesystem::path(mRenderDatasetRootText);
+    if (mRenderSamples.empty() || requestedRoot != mRenderDatasetRoot)
+    {
+        loadRenderMetadata();
+    }
+
+    mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    const bool loadPVV = mRenderVolumeKind == 1u;
+    const std::filesystem::path volumePath =
+        mRenderDatasetRoot / (loadPVV ? "pvv" : "gv") / fourDigitName(mRenderSampleIndex, loadPVV ? "_pvv.bin.gz" : "_gv.bin.gz");
+
+    std::vector<uint8_t> bytes = readGzipStoredFile(volumePath);
+    const size_t expectedBytes = size_t(mRenderVolumeSize) * size_t(mRenderVolumeSize) * size_t(mRenderVolumeDepth) / 8;
+    if (bytes.size() != expectedBytes)
+    {
+        FALCOR_THROW("Render volume '{}' has {} bytes, expected {}.", volumePath.string(), bytes.size(), expectedBytes);
+    }
+
+    mpRenderVolume = getDevice()->createTexture3D(
+        mRenderVolumeSize / 32,
+        mRenderVolumeSize,
+        mRenderVolumeDepth,
+        ResourceFormat::R32Uint,
+        1,
+        bytes.data(),
+        ResourceBindFlags::ShaderResource
+    );
+
+    if (mRenderUseSampleCamera)
+    {
+        mPreviewSamples = mRenderSamples;
+        mPreviewSampleIndex = mRenderSampleIndex;
+        mPreviewPlayback = false;
+        applyPreviewSample();
+    }
+
+    mRenderScenePreview = true;
+    mRenderPVVOverlay = true;
+    mRenderStatus =
+        "Loaded " + std::string(loadPVV ? "PVV" : "GV") + " sample " + std::to_string(mRenderSampleIndex) + " from " +
+        volumePath.string();
+    mLastExportStatus = mRenderStatus;
 }
 
 std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const
@@ -988,6 +1266,96 @@ void NeuralPVSExporter::writeDebugProjections(
     writePgm(makeName("yz"), yz, mVolumeSize, mVolumeDepth);
 }
 
+std::vector<uint8_t> NeuralPVSExporter::readGzipStoredFile(const std::filesystem::path& path) const
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        FALCOR_THROW("Failed to open compressed volume '{}'.", path.string());
+    }
+
+    std::vector<uint8_t> fileBytes(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+
+    if (fileBytes.size() < 18 || fileBytes[0] != 0x1f || fileBytes[1] != 0x8b || fileBytes[2] != 0x08)
+    {
+        FALCOR_THROW("Compressed volume '{}' is not a supported gzip file.", path.string());
+    }
+
+    size_t offset = 10;
+
+    if ((fileBytes[3] & 0x04u) != 0u)
+    {
+        if (offset + 2 > fileBytes.size())
+            FALCOR_THROW("Compressed volume '{}' has a truncated gzip extra field.", path.string());
+        const uint16_t extraLength = readLE16(fileBytes, offset);
+        offset += 2 + extraLength;
+    }
+
+    auto skipNullTerminatedField = [&](const char* fieldName)
+    {
+        while (offset < fileBytes.size() && fileBytes[offset] != 0)
+            ++offset;
+        if (offset >= fileBytes.size())
+            FALCOR_THROW("Compressed volume '{}' has a truncated gzip {} field.", path.string(), fieldName);
+        ++offset;
+    };
+
+    if ((fileBytes[3] & 0x08u) != 0u) skipNullTerminatedField("name");
+    if ((fileBytes[3] & 0x10u) != 0u) skipNullTerminatedField("comment");
+    if ((fileBytes[3] & 0x02u) != 0u) offset += 2;
+
+    std::vector<uint8_t> output;
+    bool sawFinalBlock = false;
+
+    while (!sawFinalBlock)
+    {
+        if (offset + 5 > fileBytes.size())
+        {
+            FALCOR_THROW("Compressed volume '{}' ended before the next deflate block.", path.string());
+        }
+
+        const uint8_t blockHeader = fileBytes[offset++];
+        sawFinalBlock = (blockHeader & 0x01u) != 0u;
+        const uint8_t blockType = (blockHeader >> 1) & 0x03u;
+        if (blockType != 0u)
+        {
+            FALCOR_THROW("Compressed volume '{}' uses compressed deflate blocks; this viewer expects stored blocks.", path.string());
+        }
+
+        const uint16_t blockLength = readLE16(fileBytes, offset);
+        const uint16_t inverseLength = readLE16(fileBytes, offset + 2);
+        offset += 4;
+
+        if (uint16_t(~blockLength) != inverseLength)
+        {
+            FALCOR_THROW("Compressed volume '{}' has an invalid stored-block length.", path.string());
+        }
+        if (offset + blockLength > fileBytes.size())
+        {
+            FALCOR_THROW("Compressed volume '{}' has a truncated stored block.", path.string());
+        }
+
+        output.insert(output.end(), fileBytes.begin() + offset, fileBytes.begin() + offset + blockLength);
+        offset += blockLength;
+    }
+
+    if (offset + 8 > fileBytes.size())
+    {
+        FALCOR_THROW("Compressed volume '{}' is missing its gzip trailer.", path.string());
+    }
+
+    const uint32_t expectedSize = readLE32(fileBytes, fileBytes.size() - 4);
+    if (uint32_t(output.size()) != expectedSize)
+    {
+        FALCOR_THROW("Compressed volume '{}' unpacked to {} bytes, gzip trailer says {}.", path.string(), output.size(), expectedSize);
+    }
+
+    return output;
+}
+
 std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(const std::filesystem::path& path) const
 {
     std::ifstream file(path);
@@ -1087,7 +1455,3 @@ int main(int argc, char** argv)
 {
     return catchAndReportAllExceptions([&]() { return runMain(argc, argv); });
 }
-
-
-
-
