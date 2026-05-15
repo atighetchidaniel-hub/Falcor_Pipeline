@@ -388,11 +388,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                     "Exporting sample " + std::to_string(mProgressiveExportIndex) + " / " +
                     std::to_string(mProgressiveExportSamples.empty() ? 0u : uint32_t(mProgressiveExportSamples.size() - 1u))
                 );
-                if (w.button("Cancel export"))
-                {
-                    mProgressiveExportActive = false;
-                    mLastExportStatus = "Canceled export at sample " + std::to_string(mProgressiveExportIndex) + ".";
-                }
+                w.text("Use global Stop to cancel.");
             }
         }
     }
@@ -414,36 +410,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
     }
 
-    if (w.button("Run Mode") && !mProgressiveExportActive)
+    const bool modeRunning = isModeRunning();
+    if (w.button(modeRunning ? "Stop" : "Start"))
     {
-        mSamplingMode = 1;
-        mVisibilityMode = 1;
-        mVolumeMappingMode = 1;
-        mScenePath = std::filesystem::path(mScenePathText);
-        mOutputRoot = std::filesystem::path(mOutputRootText);
-        mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
-        mRenderVolumeSource = 0;
-        mRenderUseSampleCamera = true;
-        mRenderKeepOutsidePVVInView = true;
-        mRenderPVVOverlay = false;
-        mRenderLastCapturedSampleIndex = 0xffffffffu;
-        mRenderCapturedFrameCount = 0;
-
-        loadScene(mScenePath);
-        createResources();
-        createPreviewPass();
-        createGVPass();
-        createPVVPass();
-        createPVVRenderPass();
-
-        if (mExportMode == 3)
-        {
-            startRenderPVVMode();
-        }
+        if (modeRunning)
+            stopCurrentMode();
         else
-        {
-            startProgressiveExport();
-        }
+            startSelectedMode();
     }
 
     w.separator();
@@ -573,14 +546,22 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     if (!mpScene || !mpPreviewPass || !mpCamera)
         return;
 
-    if (pTargetFbo->getHeight() > 0)
+    const bool usePathCameraAspect =
+        !mPreviewSamples.empty() && mPreviewSamples[std::min(mPreviewSampleIndex, uint32_t(mPreviewSamples.size() - 1u))].hasCamera;
+    if (usePathCameraAspect)
+    {
+        mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
+    }
+    else if (pTargetFbo->getHeight() > 0)
     {
         mpCamera->setAspectRatio(float(pTargetFbo->getWidth()) / float(pTargetFbo->getHeight()));
     }
 
     if (!mPreviewSamples.empty())
     {
-        if (mPreviewPlayback)
+        const bool holdFirstRenderPVVFrame =
+            mRenderPVVCullScene && mRenderExportFrames && mRenderLastCapturedSampleIndex == 0xffffffffu;
+        if (mPreviewPlayback && !holdFirstRenderPVVFrame)
         {
             mPreviewAccumulator += getGlobalClock().getDelta();
             const double frameSeconds = 1.0 / std::max(0.5f, mPreviewFps);
@@ -723,6 +704,7 @@ void NeuralPVSExporter::applyPreviewSample()
 
     const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
+    mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
 }
 
 void NeuralPVSExporter::loadRenderMetadata()
@@ -881,6 +863,84 @@ void NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     mLastExportStatus = mRenderStatus;
 }
 
+bool NeuralPVSExporter::isModeRunning() const
+{
+    if (mProgressiveExportActive)
+        return true;
+
+    return mPreviewPlayback;
+}
+
+void NeuralPVSExporter::startSelectedMode()
+{
+    mSamplingMode = 1;
+    mVisibilityMode = 1;
+    mVolumeMappingMode = 1;
+    mScenePath = std::filesystem::path(mScenePathText);
+    mOutputRoot = std::filesystem::path(mOutputRootText);
+    mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
+    mRenderVolumeSource = 0;
+    mRenderUseSampleCamera = true;
+    mRenderKeepOutsidePVVInView = true;
+    mRenderPVVOverlay = false;
+    mRenderLastCapturedSampleIndex = 0xffffffffu;
+    mRenderCapturedFrameCount = 0;
+
+    loadScene(mScenePath);
+    createResources();
+    createPreviewPass();
+    createGVPass();
+    createPVVPass();
+    createPVVRenderPass();
+
+    if (mExportMode == 3)
+    {
+        startRenderPVVMode();
+    }
+    else
+    {
+        startProgressiveExport();
+    }
+}
+
+void NeuralPVSExporter::stopCurrentMode()
+{
+    if (mProgressiveExportActive)
+    {
+        mProgressiveExportActive = false;
+        mPreviewPlayback = false;
+        mPreviewAccumulator = 0.0;
+        mLastExportStatus = "Stopped export at sample " + std::to_string(mProgressiveExportIndex) + ".";
+        return;
+    }
+
+    if (mExportMode == 3 && mRenderPVVCullScene)
+    {
+        mPreviewPlayback = false;
+        mPreviewAccumulator = 0.0;
+        mRenderPVVFinished = true;
+
+        const std::string prefix = "RenderPVV stopped at sample " + std::to_string(mRenderSampleIndex) + ".";
+        if (mRenderExportFrames && mRenderFrameExportMode == 1u && mRenderCapturedFrameCount > 0u)
+        {
+            encodeRenderVideo(prefix);
+        }
+        else
+        {
+            mRenderStatus = prefix + (mRenderExportFrames ? " Frames saved to " + getRenderFrameOutputPath().string() : "");
+            mLastExportStatus = mRenderStatus;
+        }
+        return;
+    }
+
+    if (mPreviewPlayback)
+    {
+        mPreviewPlayback = false;
+        mPreviewAccumulator = 0.0;
+        mLastExportStatus = "Stopped path playback.";
+    }
+}
+
 void NeuralPVSExporter::startRenderPVVMode()
 {
     mRenderDatasetRootText = (std::filesystem::path(mOutputRootText) / mDatasetName).string();
@@ -1011,7 +1071,7 @@ void NeuralPVSExporter::finishRenderPVVMode()
 
     if (mRenderExportFrames && mRenderFrameExportMode == 1u)
     {
-        encodeRenderVideo();
+        encodeRenderVideo("RenderPVV finished.");
         return;
     }
 
@@ -1021,7 +1081,7 @@ void NeuralPVSExporter::finishRenderPVVMode()
     mLastExportStatus = mRenderStatus;
 }
 
-void NeuralPVSExporter::encodeRenderVideo()
+void NeuralPVSExporter::encodeRenderVideo(const std::string& completionPrefix)
 {
     const std::filesystem::path framesPattern = getRenderFrameStagingPath() / "%04d.png";
     const std::filesystem::path videoPath = getRenderVideoOutputPath();
@@ -1043,7 +1103,7 @@ void NeuralPVSExporter::encodeRenderVideo()
     if (result == 0)
     {
         mRenderStatus =
-            "RenderPVV finished. Lossless video saved to " + videoPath.string() +
+            completionPrefix + " Lossless video saved to " + videoPath.string() +
             ". Source frames: " + getRenderFrameStagingPath().string();
     }
     else
@@ -1060,13 +1120,13 @@ void NeuralPVSExporter::encodeRenderVideo()
         if (result == 0)
         {
             mRenderStatus =
-                "RenderPVV finished. Lossless video saved to " + videoPath.string() +
+                completionPrefix + " Lossless video saved to " + videoPath.string() +
                 " using FFV1 fallback. Source frames: " + getRenderFrameStagingPath().string();
         }
         else
         {
             mRenderStatus =
-                "RenderPVV finished, but ffmpeg failed. Source frames are in " + getRenderFrameStagingPath().string() +
+                completionPrefix + " Video encoding failed. Source frames are in " + getRenderFrameStagingPath().string() +
                 ". Tried: " + nvencCommand.str() + " | " + ffv1Command.str();
         }
     }

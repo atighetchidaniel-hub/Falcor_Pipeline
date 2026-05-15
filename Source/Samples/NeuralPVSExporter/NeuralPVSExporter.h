@@ -61,6 +61,9 @@ private:
     void loadRenderMetadata();
     void loadRenderVolume();
     void ensureRenderVolumeLoaded(bool forceReload);
+    bool isModeRunning() const;
+    void startSelectedMode();
+    void stopCurrentMode();
     void startRenderPVVMode();
     std::filesystem::path resolveRenderVolumePath() const;
     std::filesystem::path getRenderFrameOutputPath() const;
@@ -68,7 +71,7 @@ private:
     std::filesystem::path getRenderVideoOutputPath() const;
     void captureRenderFrame(const ref<Fbo>& pTargetFbo);
     void finishRenderPVVMode();
-    void encodeRenderVideo();
+    void encodeRenderVideo(const std::string& completionPrefix);
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
