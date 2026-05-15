@@ -64,7 +64,11 @@ private:
     void startRenderPVVMode();
     std::filesystem::path resolveRenderVolumePath() const;
     std::filesystem::path getRenderFrameOutputPath() const;
+    std::filesystem::path getRenderFrameStagingPath() const;
+    std::filesystem::path getRenderVideoOutputPath() const;
     void captureRenderFrame(const ref<Fbo>& pTargetFbo);
+    void finishRenderPVVMode();
+    void encodeRenderVideo();
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
@@ -156,6 +160,7 @@ private:
     float mRenderViewCellNearPlane = 0.3f;
     float mRenderViewCellFarPlane = 30.0f;
     bool mRenderExportFrames = false;
+    uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
     bool mRenderPVVCullScene = false;
     bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;
@@ -170,6 +175,7 @@ private:
     uint32_t mRenderLoadedVolumeSource = 0xffffffffu;
     uint32_t mRenderLastCapturedSampleIndex = 0xffffffffu;
     uint32_t mRenderCapturedFrameCount = 0;
+    bool mRenderPVVFinished = false;
     std::filesystem::path mRenderLoadedVolumePath;
 
     bool mProgressiveExportActive = false;

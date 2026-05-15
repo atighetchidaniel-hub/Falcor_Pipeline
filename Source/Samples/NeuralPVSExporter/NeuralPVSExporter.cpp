@@ -6,6 +6,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -188,6 +189,60 @@ namespace
         const float len = length(value);
         return len > 0.00001f ? value / len : fallback;
     }
+
+    std::string quoteCommandPath(const std::filesystem::path& path)
+    {
+        std::string value = path.string();
+        std::replace(value.begin(), value.end(), '\\', '/');
+        std::string quoted = "\"";
+        for (char c : value)
+        {
+            if (c == '"')
+                quoted += "\\\"";
+            else
+                quoted += c;
+        }
+        quoted += "\"";
+        return quoted;
+    }
+
+    std::filesystem::path findFFmpegExecutable()
+    {
+#ifdef _WIN32
+        constexpr char kPathSeparator = ';';
+        const std::string executableName = "ffmpeg.exe";
+#else
+        constexpr char kPathSeparator = ':';
+        const std::string executableName = "ffmpeg";
+#endif
+
+        if (const char* pathEnv = std::getenv("PATH"))
+        {
+            std::stringstream paths(pathEnv);
+            std::string path;
+            while (std::getline(paths, path, kPathSeparator))
+            {
+                const std::filesystem::path candidate = std::filesystem::path(path) / executableName;
+                if (std::filesystem::exists(candidate))
+                    return candidate;
+            }
+        }
+
+#ifdef _WIN32
+        const std::array<std::filesystem::path, 2> commonPaths = {
+            std::filesystem::path("C:/ffmpeg/bin/ffmpeg.exe"),
+            std::filesystem::path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
+        };
+
+        for (const std::filesystem::path& candidate : commonPaths)
+        {
+            if (std::filesystem::exists(candidate))
+                return candidate;
+        }
+#endif
+
+        return executableName;
+    }
 }
 
 NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config) : SampleApp(config) {}
@@ -276,7 +331,16 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             if (mExportMode == 3)
             {
                 w.checkbox("Export frames", mRenderExportFrames);
-                w.text("Frame output: " + getRenderFrameOutputPath().string());
+                Gui::DropdownList frameExportModes = {
+                    {0, "Image sequence"},
+                    {1, "Lossless video"},
+                };
+                w.dropdown("Frame export mode", frameExportModes, mRenderFrameExportMode);
+
+                if (mRenderFrameExportMode == 0)
+                    w.text("Frame output: " + getRenderFrameOutputPath().string());
+                else
+                    w.text("Video output: " + getRenderVideoOutputPath().string());
             }
 
             Gui::DropdownList pvvFilters = {
@@ -526,16 +590,13 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
                 {
                     if (mPreviewSampleIndex + 1u >= uint32_t(mPreviewSamples.size()))
                     {
-                        mPreviewPlayback = false;
-                        mPreviewAccumulator = 0.0;
-                        mRenderStatus =
-                            "RenderPVV finished at sample " + std::to_string(mPreviewSampleIndex) +
-                            (mRenderExportFrames ? ". Frames saved to " + getRenderFrameOutputPath().string() : ".");
-                        mLastExportStatus = mRenderStatus;
+                        finishRenderPVVMode();
                         break;
                     }
 
                     ++mPreviewSampleIndex;
+                    mPreviewAccumulator = 0.0;
+                    break;
                 }
                 else
                 {
@@ -834,6 +895,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     mRenderSampleIndex = 0;
     mRenderLastCapturedSampleIndex = 0xffffffffu;
     mRenderCapturedFrameCount = 0;
+    mRenderPVVFinished = false;
     mPreviewSamples = mRenderSamples;
     mPreviewSampleIndex = 0;
     mPreviewAccumulator = 0.0;
@@ -842,6 +904,10 @@ void NeuralPVSExporter::startRenderPVVMode()
     if (mRenderExportFrames)
     {
         std::filesystem::create_directories(getRenderFrameOutputPath());
+        if (mRenderFrameExportMode == 1u)
+        {
+            std::filesystem::create_directories(getRenderFrameStagingPath());
+        }
     }
 
     applyPreviewSample();
@@ -849,7 +915,12 @@ void NeuralPVSExporter::startRenderPVVMode()
 
     mRenderStatus =
         "RenderPVV mode running through predicted PVV samples" +
-        std::string(mRenderExportFrames ? ". Saving frames to " + getRenderFrameOutputPath().string() : ".");
+        std::string(
+            mRenderExportFrames
+                ? (mRenderFrameExportMode == 0u ? ". Saving frames to " + getRenderFrameOutputPath().string()
+                                                : ". Saving lossless video to " + getRenderVideoOutputPath().string())
+                : "."
+        );
     mLastExportStatus = mRenderStatus;
 }
 
@@ -894,6 +965,16 @@ std::filesystem::path NeuralPVSExporter::getRenderFrameOutputPath() const
     return std::filesystem::path(mPredictedPVVRootText) / "00_color";
 }
 
+std::filesystem::path NeuralPVSExporter::getRenderFrameStagingPath() const
+{
+    return getRenderFrameOutputPath() / "_frames";
+}
+
+std::filesystem::path NeuralPVSExporter::getRenderVideoOutputPath() const
+{
+    return getRenderFrameOutputPath() / "_rendering.mkv";
+}
+
 void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
 {
     if (!pTargetFbo || mRenderSamples.empty() || mRenderSampleIndex >= mRenderSamples.size())
@@ -902,7 +983,7 @@ void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
     if (mRenderLastCapturedSampleIndex == mRenderSampleIndex)
         return;
 
-    const std::filesystem::path outputPath = getRenderFrameOutputPath();
+    const std::filesystem::path outputPath = mRenderFrameExportMode == 1u ? getRenderFrameStagingPath() : getRenderFrameOutputPath();
     std::filesystem::create_directories(outputPath);
 
     std::ostringstream filename;
@@ -916,6 +997,79 @@ void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
     mRenderStatus =
         "Saved RenderPVV frame " + std::to_string(mRenderSampleIndex) + " / " +
         std::to_string(mRenderSamples.size() - 1u) + ": " + framePath.string();
+    mLastExportStatus = mRenderStatus;
+}
+
+void NeuralPVSExporter::finishRenderPVVMode()
+{
+    if (mRenderPVVFinished)
+        return;
+
+    mRenderPVVFinished = true;
+    mPreviewPlayback = false;
+    mPreviewAccumulator = 0.0;
+
+    if (mRenderExportFrames && mRenderFrameExportMode == 1u)
+    {
+        encodeRenderVideo();
+        return;
+    }
+
+    mRenderStatus =
+        "RenderPVV finished at sample " + std::to_string(mPreviewSampleIndex) +
+        (mRenderExportFrames ? ". Frames saved to " + getRenderFrameOutputPath().string() : ".");
+    mLastExportStatus = mRenderStatus;
+}
+
+void NeuralPVSExporter::encodeRenderVideo()
+{
+    const std::filesystem::path framesPattern = getRenderFrameStagingPath() / "%04d.png";
+    const std::filesystem::path videoPath = getRenderVideoOutputPath();
+    std::filesystem::create_directories(videoPath.parent_path());
+
+    const std::filesystem::path ffmpegPath = findFFmpegExecutable();
+    const int fps = std::max(1, int(std::round(mPreviewFps)));
+
+    std::ostringstream nvencCommand;
+    nvencCommand << quoteCommandPath(ffmpegPath) << " -hide_banner -loglevel error -y "
+                 << "-framerate " << fps << " "
+                 << "-start_number 0 "
+                 << "-i " << quoteCommandPath(framesPattern) << " "
+                 << "-vsync cfr -c:v hevc_nvenc -tune lossless -rc constqp -pix_fmt gbrp "
+                 << "-bsf:v \"hevc_metadata=video_full_range_flag=1\" "
+                 << "-an " << quoteCommandPath(videoPath);
+
+    int result = std::system(nvencCommand.str().c_str());
+    if (result == 0)
+    {
+        mRenderStatus =
+            "RenderPVV finished. Lossless video saved to " + videoPath.string() +
+            ". Source frames: " + getRenderFrameStagingPath().string();
+    }
+    else
+    {
+        std::ostringstream ffv1Command;
+        ffv1Command << quoteCommandPath(ffmpegPath) << " -hide_banner -loglevel error -y "
+                    << "-framerate " << fps << " "
+                    << "-start_number 0 "
+                    << "-i " << quoteCommandPath(framesPattern) << " "
+                    << "-c:v ffv1 -level 3 -pix_fmt bgra "
+                    << quoteCommandPath(videoPath);
+
+        result = std::system(ffv1Command.str().c_str());
+        if (result == 0)
+        {
+            mRenderStatus =
+                "RenderPVV finished. Lossless video saved to " + videoPath.string() +
+                " using FFV1 fallback. Source frames: " + getRenderFrameStagingPath().string();
+        }
+        else
+        {
+            mRenderStatus =
+                "RenderPVV finished, but ffmpeg failed. Source frames are in " + getRenderFrameStagingPath().string() +
+                ". Tried: " + nvencCommand.str() + " | " + ffv1Command.str();
+        }
+    }
     mLastExportStatus = mRenderStatus;
 }
 
