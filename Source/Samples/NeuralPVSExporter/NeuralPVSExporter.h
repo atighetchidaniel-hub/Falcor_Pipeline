@@ -66,6 +66,7 @@ private:
     void stopCurrentMode();
     void startRenderPVVMode();
     std::filesystem::path resolveRenderVolumePath() const;
+    std::filesystem::path getRenderPredictedPVVRoot() const;
     std::filesystem::path getRenderFrameOutputPath() const;
     std::filesystem::path getRenderFrameStagingPath() const;
     std::filesystem::path getRenderVideoOutputPath() const;
@@ -151,7 +152,7 @@ private:
     std::vector<ExportSample> mPreviewSamples;
 
     std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_robolab_usd_frustum_128";
-    std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_predictions/falcor_robolab_usd_frustum_128";
+    std::string mPredictedPVVRootText;
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
     uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = box, 3 = conservative trilinear

@@ -314,7 +314,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.textbox("Scene path", mScenePathText);
             w.textbox("Dataset name", mDatasetName);
             w.textbox("Output root", mOutputRootText);
-            w.textbox("Predicted PVV folder", mPredictedPVVRootText);
+            w.text("Generated predicted PVV: " + (std::filesystem::path(mOutputRootText) / mDatasetName / "predicted_pvv").string());
         }
     }
 
@@ -337,6 +337,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.var("View cell far", mViewCellFarPlane, 0.1f, 1000.0f, 0.1f);
             if (mExportMode == 3)
             {
+                w.textbox("Predicted PVV override", mPredictedPVVRootText);
                 w.checkbox("Export frames", mRenderExportFrames);
                 Gui::DropdownList frameExportModes = {
                     {0, "Image sequence"},
@@ -436,7 +437,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     w.text("Output: " + (mOutputRoot / mDatasetName).string());
     if (mExportMode == 3)
     {
-        w.text("Predicted PVV: " + std::filesystem::path(mPredictedPVVRootText).string());
+        w.text("Predicted PVV: " + getRenderPredictedPVVRoot().string());
         w.text(mRenderStatus);
     }
     w.text(mLastExportStatus);
@@ -856,7 +857,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
         const uint32_t sampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
         if (mRenderVolumeSource == 0u)
         {
-            const std::filesystem::path predictedRoot = std::filesystem::path(mPredictedPVVRootText);
+            const std::filesystem::path predictedRoot = getRenderPredictedPVVRoot();
             mRenderStatus =
                 "Can't find predicted PVV sample " + std::to_string(sampleIndex) +
                 ". Tried " + (predictedRoot / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz")).string() +
@@ -1085,7 +1086,7 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
 
     if (mRenderVolumeSource == 0u)
     {
-        const std::filesystem::path predictedRoot = std::filesystem::path(mPredictedPVVRootText);
+        const std::filesystem::path predictedRoot = getRenderPredictedPVVRoot();
         const std::filesystem::path unpaddedPath = predictedRoot / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz");
         if (std::filesystem::exists(unpaddedPath))
             return unpaddedPath;
@@ -1107,9 +1108,19 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
     return std::filesystem::exists(gvPath) ? gvPath : std::filesystem::path();
 }
 
+std::filesystem::path NeuralPVSExporter::getRenderPredictedPVVRoot() const
+{
+    const std::filesystem::path overrideRoot = std::filesystem::path(mPredictedPVVRootText);
+    if (!overrideRoot.empty())
+        return overrideRoot;
+
+    const std::filesystem::path datasetRoot = mRenderDatasetRoot.empty() ? std::filesystem::path(mRenderDatasetRootText) : mRenderDatasetRoot;
+    return datasetRoot / "predicted_pvv";
+}
+
 std::filesystem::path NeuralPVSExporter::getRenderFrameOutputPath() const
 {
-    return std::filesystem::path(mPredictedPVVRootText) / "00_color";
+    return getRenderPredictedPVVRoot() / "00_color";
 }
 
 std::filesystem::path NeuralPVSExporter::getRenderFrameStagingPath() const
@@ -1597,7 +1608,7 @@ void NeuralPVSExporter::writeVolumePair(
     {
         writeVolumeFile(datasetRoot / "pvv" / fourDigitName(index, "_pvv.bin.gz"), pvvBytes);
 
-        const std::filesystem::path predictedRoot = std::filesystem::path(mPredictedPVVRootText);
+        const std::filesystem::path predictedRoot = datasetRoot / "predicted_pvv";
         writeVolumeFile(predictedRoot / (std::to_string(index) + "_predicted_pvv.bin.gz"), pvvBytes);
     }
 }
