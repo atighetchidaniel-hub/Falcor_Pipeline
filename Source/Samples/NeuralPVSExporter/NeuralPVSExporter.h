@@ -43,7 +43,32 @@ private:
     void renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void loadPreviewPath();
     void applyPreviewSample();
+    void startProgressiveExport();
+    void processProgressiveExportSample(RenderContext* pRenderContext);
+    void finishProgressiveExport();
     void exportSceneVolumes(RenderContext* pRenderContext);
+    std::vector<ExportSample> buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const;
+    void validateExportSamples(const std::vector<ExportSample>& samples, bool useCameraFrustum) const;
+    void exportOneSample(
+        RenderContext* pRenderContext,
+        const ExportSample& sample,
+        uint32_t index,
+        const float3& volumeExtent,
+        float viewCellRadius,
+        uint64_t& gvBitCount,
+        uint64_t& pvvBitCount
+    );
+    void writeExportMetadata(
+        const std::vector<ExportSample>& samples,
+        const std::vector<uint64_t>& gvBitCounts,
+        const std::vector<uint64_t>& pvvBitCounts,
+        const AABB& sceneBounds,
+        const float3& sceneCenter,
+        const float3& sceneExtent,
+        const float3& volumeExtent,
+        const float3& sampleStep,
+        bool useCameraFrustum
+    );
     void writeVolumePair(
         const std::vector<uint8_t>& gvBytes,
         const std::vector<uint8_t>& pvvBytes,
@@ -85,10 +110,24 @@ private:
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;
+    bool mPreviewWhileExporting = true;
     float mPreviewFps = 12.f;
     uint32_t mPreviewSampleIndex = 0;
     double mPreviewAccumulator = 0.0;
     std::vector<ExportSample> mPreviewSamples;
+
+    bool mProgressiveExportActive = false;
+    uint32_t mProgressiveExportIndex = 0;
+    bool mProgressiveUseCameraFrustum = false;
+    AABB mProgressiveSceneBounds;
+    float3 mProgressiveSceneCenter = float3(0.f);
+    float3 mProgressiveSceneExtent = float3(0.f);
+    float3 mProgressiveVolumeExtent = float3(0.f);
+    float3 mProgressiveSampleStep = float3(0.f);
+    float mProgressiveViewCellRadius = 0.f;
+    std::vector<ExportSample> mProgressiveExportSamples;
+    std::vector<uint64_t> mProgressiveGVBitCounts;
+    std::vector<uint64_t> mProgressivePVVBitCounts;
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;

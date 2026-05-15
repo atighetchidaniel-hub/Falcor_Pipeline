@@ -161,9 +161,20 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
     const float4 clearColor(0.08f, 0.10f, 0.12f, 1.0f);
     pRenderContext->clearFbo(pTargetFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::All);
 
+    if (mProgressiveExportActive && !mProgressiveExportSamples.empty())
+    {
+        mPreviewSampleIndex = std::min(mProgressiveExportIndex, uint32_t(mProgressiveExportSamples.size() - 1u));
+        applyPreviewSample();
+    }
+
     if (mRenderScenePreview)
     {
         renderPreview(pRenderContext, pTargetFbo);
+    }
+
+    if (mProgressiveExportActive)
+    {
+        processProgressiveExportSample(pRenderContext);
     }
 }
 
@@ -226,6 +237,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         {
             w.checkbox("Render scene preview", mRenderScenePreview);
             w.checkbox("Play path", mPreviewPlayback);
+            w.checkbox("Preview while exporting", mPreviewWhileExporting);
             w.var("Playback FPS", mPreviewFps, 0.5f, 60.0f, 0.5f);
 
             const uint32_t maxPreviewIndex = mPreviewSamples.empty() ? 0u : uint32_t(mPreviewSamples.size() - 1u);
@@ -249,6 +261,18 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             }
 
             w.text("Preview samples: " + std::to_string(mPreviewSamples.size()));
+            if (mProgressiveExportActive)
+            {
+                w.text(
+                    "Exporting sample " + std::to_string(mProgressiveExportIndex) + " / " +
+                    std::to_string(mProgressiveExportSamples.empty() ? 0u : uint32_t(mProgressiveExportSamples.size() - 1u))
+                );
+                if (w.button("Cancel export"))
+                {
+                    mProgressiveExportActive = false;
+                    mLastExportStatus = "Canceled export at sample " + std::to_string(mProgressiveExportIndex) + ".";
+                }
+            }
         }
     }
 
@@ -268,7 +292,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
     }
 
-    if (w.button("Export Selected Mode"))
+    if (w.button("Export Selected Mode") && !mProgressiveExportActive)
     {
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
@@ -279,7 +303,14 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createGVPass();
         createPVVPass();
 
-        exportSceneVolumes(getRenderContext());
+        if (mPreviewWhileExporting)
+        {
+            startProgressiveExport();
+        }
+        else
+        {
+            exportSceneVolumes(getRenderContext());
+        }
     }
 
     w.separator();
@@ -432,6 +463,271 @@ void NeuralPVSExporter::applyPreviewSample()
 
     const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
+}
+
+std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const
+{
+    const float3 sampleStep = sceneExtent * mSampleStepScale;
+    std::vector<ExportSample> samples;
+
+    if (mSamplingMode == 1)
+    {
+        return loadPathSamples(std::filesystem::path(mPathCsvText));
+    }
+
+    const uint32_t samplesPerAxis = mSamplesPerAxis < 1u ? 1u : mSamplesPerAxis;
+    samples.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
+
+    const float centerOffset = 0.5f * float(samplesPerAxis - 1u);
+    for (uint32_t z = 0; z < samplesPerAxis; ++z)
+    {
+        for (uint32_t y = 0; y < samplesPerAxis; ++y)
+        {
+            for (uint32_t x = 0; x < samplesPerAxis; ++x)
+            {
+                const float3 offset = float3(float(x) - centerOffset, float(y) - centerOffset, float(z) - centerOffset);
+                ExportSample sample;
+                sample.center = sceneCenter + offset * sampleStep;
+                samples.push_back(sample);
+            }
+        }
+    }
+
+    return samples;
+}
+
+void NeuralPVSExporter::validateExportSamples(const std::vector<ExportSample>& samples, bool useCameraFrustum) const
+{
+    if (samples.empty())
+    {
+        FALCOR_THROW("Export did not produce any sample centers.");
+    }
+
+    if (!useCameraFrustum)
+        return;
+
+    if (mSamplingMode != 1)
+    {
+        FALCOR_THROW("Camera frustum visibility requires Path CSV sampling.");
+    }
+
+    const bool allSamplesHaveCamera = std::all_of(samples.begin(), samples.end(), [](const ExportSample& sample) { return sample.hasCamera; });
+    if (!allSamplesHaveCamera)
+    {
+        FALCOR_THROW("Camera frustum visibility requires CSV columns forward_x, forward_y, forward_z, and fov.");
+    }
+}
+
+void NeuralPVSExporter::startProgressiveExport()
+{
+    mProgressiveSceneBounds = mpScene->getSceneBounds();
+    mProgressiveSceneCenter = mProgressiveSceneBounds.center();
+    mProgressiveSceneExtent = max(mProgressiveSceneBounds.extent(), float3(0.0001f));
+    mProgressiveVolumeExtent = mProgressiveSceneExtent * mVolumeExtentScale;
+    mProgressiveSampleStep = mProgressiveSceneExtent * mSampleStepScale;
+    mProgressiveViewCellRadius = std::max(0.1f, mProgressiveSceneBounds.radius() * 0.02f);
+    mProgressiveUseCameraFrustum = mVisibilityMode == 1;
+
+    mProgressiveExportSamples = buildExportSamples(mProgressiveSceneCenter, mProgressiveSceneExtent);
+    validateExportSamples(mProgressiveExportSamples, mProgressiveUseCameraFrustum);
+
+    mProgressiveGVBitCounts.clear();
+    mProgressivePVVBitCounts.clear();
+    mProgressiveGVBitCounts.reserve(mProgressiveExportSamples.size());
+    mProgressivePVVBitCounts.reserve(mProgressiveExportSamples.size());
+    mProgressiveExportIndex = 0;
+    mProgressiveExportActive = true;
+
+    mPreviewSamples = mProgressiveExportSamples;
+    mPreviewSampleIndex = 0;
+    mPreviewPlayback = false;
+    mPreviewAccumulator = 0.0;
+    applyPreviewSample();
+
+    mLastExportStatus = "Started preview export of " + std::to_string(mProgressiveExportSamples.size()) + " samples.";
+}
+
+void NeuralPVSExporter::processProgressiveExportSample(RenderContext* pRenderContext)
+{
+    if (!mProgressiveExportActive)
+        return;
+
+    if (mProgressiveExportIndex >= mProgressiveExportSamples.size())
+    {
+        finishProgressiveExport();
+        return;
+    }
+
+    mPreviewSampleIndex = mProgressiveExportIndex;
+    applyPreviewSample();
+
+    uint64_t gvBitCount = 0;
+    uint64_t pvvBitCount = 0;
+    exportOneSample(
+        pRenderContext,
+        mProgressiveExportSamples[mProgressiveExportIndex],
+        mProgressiveExportIndex,
+        mProgressiveVolumeExtent,
+        mProgressiveViewCellRadius,
+        gvBitCount,
+        pvvBitCount
+    );
+
+    mProgressiveGVBitCounts.push_back(gvBitCount);
+    mProgressivePVVBitCounts.push_back(pvvBitCount);
+
+    mLastExportStatus =
+        "Exported sample " + std::to_string(mProgressiveExportIndex) + " / " +
+        std::to_string(mProgressiveExportSamples.size() - 1) + " with live preview.";
+
+    ++mProgressiveExportIndex;
+    if (mProgressiveExportIndex >= mProgressiveExportSamples.size())
+    {
+        finishProgressiveExport();
+    }
+}
+
+void NeuralPVSExporter::finishProgressiveExport()
+{
+    writeExportMetadata(
+        mProgressiveExportSamples,
+        mProgressiveGVBitCounts,
+        mProgressivePVVBitCounts,
+        mProgressiveSceneBounds,
+        mProgressiveSceneCenter,
+        mProgressiveSceneExtent,
+        mProgressiveVolumeExtent,
+        mProgressiveSampleStep,
+        mProgressiveUseCameraFrustum
+    );
+
+    mProgressiveExportActive = false;
+    mLastExportStatus = "Exported " + std::to_string(mProgressiveExportSamples.size()) + " " + mDatasetName + " samples with live preview.";
+}
+
+void NeuralPVSExporter::exportOneSample(
+    RenderContext* pRenderContext,
+    const ExportSample& sample,
+    uint32_t index,
+    const float3& volumeExtent,
+    float viewCellRadius,
+    uint64_t& gvBitCount,
+    uint64_t& pvvBitCount
+)
+{
+    const float3 viewCellCenter = sample.center;
+    const float3 volumeMin = viewCellCenter - volumeExtent * 0.5f;
+    const bool useCameraFrustum = mVisibilityMode == 1;
+
+    pRenderContext->clearUAV(mpGVVolume->getUAV().get(), uint4(0, 0, 0, 0));
+    pRenderContext->clearUAV(mpPVVVolume->getUAV().get(), uint4(0, 0, 0, 0));
+    pRenderContext->clearFbo(mpGVFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::All);
+
+    auto gvRoot = mpGVPass->getRootVar();
+    gvRoot["gGeometryVolume"] = mpGVVolume;
+    gvRoot["ExporterCB"]["gSceneMin"] = volumeMin;
+    gvRoot["ExporterCB"]["gSceneExtent"] = volumeExtent;
+    gvRoot["ExporterCB"]["gVolumeSize"] = mVolumeSize;
+    gvRoot["ExporterCB"]["gVolumeDepth"] = mVolumeDepth;
+
+    mpGVPass->getState()->setFbo(mpGVFbo);
+    mpScene->rasterize(pRenderContext, mpGVPass->getState().get(), mpGVPass->getVars().get());
+
+    auto pvvRoot = mpPVVPass->getRootVar();
+    mpScene->bindShaderDataForRaytracing(pRenderContext, pvvRoot["gScene"]);
+
+    pvvRoot["gGeometryVolume"] = mpGVVolume;
+    pvvRoot["gPVVVolume"] = mpPVVVolume;
+    pvvRoot["PVVCB"]["gSceneMin"] = volumeMin;
+    pvvRoot["PVVCB"]["gSceneExtent"] = volumeExtent;
+    pvvRoot["PVVCB"]["gVolumeSize"] = mVolumeSize;
+    pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
+    pvvRoot["PVVCB"]["gViewCellCenter"] = viewCellCenter;
+    pvvRoot["PVVCB"]["gViewCellRadius"] = viewCellRadius;
+    pvvRoot["PVVCB"]["gSampleCount"] = useCameraFrustum ? 1u : 9u;
+    pvvRoot["PVVCB"]["gUseCameraFrustum"] = useCameraFrustum ? 1u : 0u;
+    pvvRoot["PVVCB"]["gCameraFovYRadians"] = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
+    pvvRoot["PVVCB"]["gCameraAspectRatio"] = std::max(0.1f, mCameraAspectRatio);
+    pvvRoot["PVVCB"]["gCameraForward"] = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
+
+    mpPVVPass->execute(pRenderContext, mVolumeSize / 32, mVolumeSize, mVolumeDepth);
+    pRenderContext->submit(true);
+
+    std::vector<uint8_t> gvBytes = pRenderContext->readTextureSubresource(mpGVVolume.get(), 0);
+    std::vector<uint8_t> pvvBytes = pRenderContext->readTextureSubresource(mpPVVVolume.get(), 0);
+
+    writeVolumePair(gvBytes, pvvBytes, mDatasetName, index);
+    if (mWriteDebugProjections)
+    {
+        const std::filesystem::path datasetRoot = mOutputRoot / mDatasetName;
+
+        if (mExportMode == 0 || mExportMode == 2)
+        {
+            writeDebugProjections(datasetRoot, gvBytes, "gv", index);
+        }
+
+        if (mExportMode == 1 || mExportMode == 2)
+        {
+            writeDebugProjections(datasetRoot, pvvBytes, "pvv", index);
+        }
+    }
+
+    gvBitCount = countSetBits(gvBytes);
+    pvvBitCount = countSetBits(pvvBytes);
+}
+
+void NeuralPVSExporter::writeExportMetadata(
+    const std::vector<ExportSample>& samples,
+    const std::vector<uint64_t>& gvBitCounts,
+    const std::vector<uint64_t>& pvvBitCounts,
+    const AABB& sceneBounds,
+    const float3& sceneCenter,
+    const float3& sceneExtent,
+    const float3& volumeExtent,
+    const float3& sampleStep,
+    bool useCameraFrustum
+)
+{
+    const std::filesystem::path datasetRoot = mOutputRoot / mDatasetName;
+    std::filesystem::create_directories(datasetRoot);
+
+    std::ofstream metadata(datasetRoot / "metadata.json");
+    metadata << "{\n";
+    metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
+    metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
+    metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
+    metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "camera_frustum" : "view_cell") << "\",\n";
+    metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
+    metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
+    metadata << "  \"sample_count\": " << samples.size() << ",\n";
+    metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
+    metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
+    metadata << "  \"scene_bounds_max\": [" << sceneBounds.maxPoint.x << ", " << sceneBounds.maxPoint.y << ", " << sceneBounds.maxPoint.z << "],\n";
+    metadata << "  \"scene_center\": [" << sceneCenter.x << ", " << sceneCenter.y << ", " << sceneCenter.z << "],\n";
+    metadata << "  \"scene_extent\": [" << sceneExtent.x << ", " << sceneExtent.y << ", " << sceneExtent.z << "],\n";
+    metadata << "  \"volume_extent\": [" << volumeExtent.x << ", " << volumeExtent.y << ", " << volumeExtent.z << "],\n";
+    metadata << "  \"sample_step\": [" << sampleStep.x << ", " << sampleStep.y << ", " << sampleStep.z << "],\n";
+    metadata << "  \"samples\": [\n";
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        metadata << "    {";
+        metadata << "\"index\": " << i << ", ";
+        metadata << "\"center\": [" << samples[i].center.x << ", " << samples[i].center.y << ", " << samples[i].center.z << "], ";
+        metadata << "\"has_camera\": " << (samples[i].hasCamera ? "true" : "false") << ", ";
+        metadata << "\"forward\": [" << samples[i].forward.x << ", " << samples[i].forward.y << ", " << samples[i].forward.z << "], ";
+        metadata << "\"fov_y_degrees\": " << samples[i].fovYDegrees << ", ";
+        metadata << "\"gv_file\": \"gv/" << std::setw(4) << std::setfill('0') << i << "_gv.bin.gz\", ";
+        metadata << "\"pvv_file\": \"pvv/" << std::setw(4) << std::setfill('0') << i << "_pvv.bin.gz\", ";
+        metadata << "\"gv_set_bits\": " << (i < gvBitCounts.size() ? gvBitCounts[i] : 0u) << ", ";
+        metadata << "\"pvv_set_bits\": " << (i < pvvBitCounts.size() ? pvvBitCounts[i] : 0u);
+        metadata << "}";
+        if (i + 1 < samples.size()) metadata << ",";
+        metadata << "\n";
+    }
+
+    metadata << "  ]\n";
+    metadata << "}\n";
 }
 
 void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
@@ -791,8 +1087,6 @@ int main(int argc, char** argv)
 {
     return catchAndReportAllExceptions([&]() { return runMain(argc, argv); });
 }
-
-
 
 
 
