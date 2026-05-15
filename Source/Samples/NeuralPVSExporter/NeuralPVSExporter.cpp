@@ -289,7 +289,7 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
         renderPVVOverlay(pRenderContext, pTargetFbo);
     }
 
-    if (mRenderPVVCullScene && mRenderExportFrames && mPreviewPlayback && !mRenderPVVFinished)
+    if (mRenderPVVActive && mRenderPVVCullScene && mRenderExportFrames && mPreviewPlayback && !mRenderPVVFinished)
     {
         captureRenderFrame(pTargetFbo);
     }
@@ -572,14 +572,14 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     if (!mPreviewSamples.empty())
     {
         const bool holdFirstRenderPVVFrame =
-            mRenderPVVCullScene && mRenderExportFrames && mRenderLastCapturedSampleIndex == 0xffffffffu;
+            mRenderPVVActive && mRenderPVVCullScene && mRenderExportFrames && mRenderLastCapturedSampleIndex == 0xffffffffu;
         if (mPreviewPlayback && !holdFirstRenderPVVFrame)
         {
             mPreviewAccumulator += getGlobalClock().getDelta();
             const double frameSeconds = 1.0 / std::max(0.5f, mPreviewFps);
             while (mPreviewAccumulator >= frameSeconds)
             {
-                if (mRenderPVVCullScene && !mRenderSamples.empty())
+                if (mRenderPVVActive && mRenderPVVCullScene && !mRenderSamples.empty())
                 {
                     if (mPreviewSampleIndex + 1u >= uint32_t(mPreviewSamples.size()))
                     {
@@ -606,7 +606,7 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     float3 renderVolumeMin = float3(0.f);
     VolumeProjectionParams renderProjection;
     uint32_t renderVolumeMappingMode = 0u;
-    if (mRenderPVVCullScene && !mRenderSamples.empty())
+    if (mRenderPVVActive && mRenderPVVCullScene && !mRenderSamples.empty())
     {
         if (mRenderUseSampleCamera && !mPreviewSamples.empty())
         {
@@ -837,6 +837,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
         {
             mPreviewPlayback = false;
             mPreviewAccumulator = 0.0;
+            mRenderPVVActive = false;
             mRenderPVVCullScene = false;
             mRenderPVVFinished = true;
             mRenderStatus = "Can't load render metadata: " + std::string(e.what());
@@ -851,6 +852,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
 
@@ -887,6 +889,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
         mRenderStatus = "Can't load render volume " + volumePath.string() + ": " + e.what();
@@ -899,6 +902,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
         mRenderStatus =
@@ -943,7 +947,7 @@ bool NeuralPVSExporter::isModeRunning() const
     if (mProgressiveExportActive)
         return true;
 
-    return mPreviewPlayback;
+    return mRenderPVVActive || mPreviewPlayback;
 }
 
 void NeuralPVSExporter::startSelectedMode()
@@ -959,6 +963,7 @@ void NeuralPVSExporter::startSelectedMode()
         mRenderVolumeSource = 0;
         mRenderUseSampleCamera = true;
         mRenderKeepOutsidePVVInView = true;
+        mRenderPVVActive = false;
         mRenderPVVOverlay = false;
         mRenderLastCapturedSampleIndex = 0xffffffffu;
         mRenderCapturedFrameCount = 0;
@@ -984,6 +989,7 @@ void NeuralPVSExporter::startSelectedMode()
         mProgressiveExportActive = false;
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
         mRenderStatus = "Can't start selected mode: " + std::string(e.what());
@@ -998,14 +1004,16 @@ void NeuralPVSExporter::stopCurrentMode()
         mProgressiveExportActive = false;
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mLastExportStatus = "Stopped export at sample " + std::to_string(mProgressiveExportIndex) + ".";
         return;
     }
 
-    if (mRenderPVVCullScene)
+    if (mRenderPVVActive || mRenderPVVCullScene)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mRenderPVVActive = false;
         mRenderPVVFinished = true;
         mRenderPVVCullScene = false;
 
@@ -1036,6 +1044,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     loadRenderMetadata();
 
     mRenderPVVCullScene = true;
+    mRenderPVVActive = true;
     mRenderKeepOutsidePVVInView = true;
     mRenderPVVOverlay = false;
     mRenderUseSampleCamera = true;
@@ -1062,7 +1071,10 @@ void NeuralPVSExporter::startRenderPVVMode()
 
     applyPreviewSample();
     if (!ensureRenderVolumeLoaded(true))
+    {
+        mRenderPVVActive = false;
         return;
+    }
 
     mRenderStatus =
         "RenderPVV mode running through predicted PVV samples" +
@@ -1166,6 +1178,8 @@ void NeuralPVSExporter::finishRenderPVVMode()
     mRenderPVVFinished = true;
     mPreviewPlayback = false;
     mPreviewAccumulator = 0.0;
+    mRenderPVVActive = false;
+    mRenderPVVCullScene = false;
 
     if (mRenderExportFrames && mRenderFrameExportMode == 1u)
     {

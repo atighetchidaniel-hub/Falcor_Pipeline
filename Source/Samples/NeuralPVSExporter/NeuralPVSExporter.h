@@ -165,6 +165,7 @@ private:
     float mRenderViewCellFarPlane = 30.0f;
     bool mRenderExportFrames = false;
     uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
+    bool mRenderPVVActive = false;
     bool mRenderPVVCullScene = false;
     bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;
