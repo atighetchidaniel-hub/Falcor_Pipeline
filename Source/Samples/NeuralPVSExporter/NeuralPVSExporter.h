@@ -63,6 +63,8 @@ private:
     void ensureRenderVolumeLoaded(bool forceReload);
     void startRenderPVVMode();
     std::filesystem::path resolveRenderVolumePath() const;
+    std::filesystem::path getRenderFrameOutputPath() const;
+    void captureRenderFrame(const ref<Fbo>& pTargetFbo);
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
@@ -153,6 +155,7 @@ private:
     float mRenderViewCellRadius = 0.3f;
     float mRenderViewCellNearPlane = 0.3f;
     float mRenderViewCellFarPlane = 30.0f;
+    bool mRenderExportFrames = false;
     bool mRenderPVVCullScene = false;
     bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;
@@ -165,6 +168,8 @@ private:
     std::string mRenderStatus = "No render volume loaded.";
     uint32_t mRenderLoadedSampleIndex = 0xffffffffu;
     uint32_t mRenderLoadedVolumeSource = 0xffffffffu;
+    uint32_t mRenderLastCapturedSampleIndex = 0xffffffffu;
+    uint32_t mRenderCapturedFrameCount = 0;
     std::filesystem::path mRenderLoadedVolumePath;
 
     bool mProgressiveExportActive = false;
