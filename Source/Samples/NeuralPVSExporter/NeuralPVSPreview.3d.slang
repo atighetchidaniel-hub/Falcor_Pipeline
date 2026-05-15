@@ -13,6 +13,18 @@ cbuffer PreviewCB
     uint gPVVFilter;
     uint gRenderPVVSource;
     uint gKeepOutsidePVVInView;
+    uint gRenderVolumeMappingMode;
+    float gViewCellNearPlane;
+    float gViewCellFarPlane;
+    float gTanHalfFovX;
+    float3 gViewCellPosition;
+    float gTanHalfFovY;
+    float3 gViewCellForward;
+    uint gPadding0;
+    float3 gViewCellRight;
+    uint gPadding1;
+    float3 gViewCellUp;
+    uint gPadding2;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -55,13 +67,33 @@ bool isInsideMainCameraFrustum(float3 worldPos)
            ndc.z >= 0.0f && ndc.z <= 1.0f;
 }
 
+bool worldToVolume01(float3 worldPos, out float3 p)
+{
+    if (gRenderVolumeMappingMode == 0u)
+    {
+        p = (worldPos - gRenderPVVVolumeMin) / gRenderPVVVolumeExtent;
+        return all(p >= 0.0f) && all(p <= 1.0f);
+    }
+
+    float3 rel = worldPos - gViewCellPosition;
+    float depth = dot(rel, normalize(gViewCellForward));
+    if (depth < gViewCellNearPlane || depth > gViewCellFarPlane)
+        return false;
+
+    float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
+    float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane));
+
+    return all(p >= 0.0f) && all(p <= 1.0f);
+}
+
 bool isVisibleInPVV(float3 worldPos)
 {
     if (gEnableRenderPVV == 0u)
         return true;
 
-    float3 p = (worldPos - gRenderPVVVolumeMin) / gRenderPVVVolumeExtent;
-    if (any(p < 0.0f) || any(p > 1.0f))
+    float3 p = float3(0.0f);
+    if (!worldToVolume01(worldPos, p))
         return gKeepOutsidePVVInView != 0u && isInsideMainCameraFrustum(worldPos);
 
     float3 gridPos = p * float3(float(gRenderPVVVolumeSize), float(gRenderPVVVolumeSize), float(gRenderPVVVolumeDepth));

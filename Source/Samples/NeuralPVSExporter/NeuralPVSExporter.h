@@ -36,6 +36,18 @@ private:
         bool hasCamera = false;
     };
 
+    struct VolumeProjectionParams
+    {
+        float3 viewCellPosition = float3(0.f);
+        float3 forward = float3(0.f, 0.f, -1.f);
+        float3 right = float3(1.f, 0.f, 0.f);
+        float3 up = float3(0.f, 1.f, 0.f);
+        float nearPlane = 0.3f;
+        float farPlane = 30.f;
+        float tanHalfFovX = 1.f;
+        float tanHalfFovY = 1.f;
+    };
+
     void loadScene(const std::filesystem::path& path);
     void createResources();
     void createPreviewPass();
@@ -57,6 +69,7 @@ private:
     void exportSceneVolumes(RenderContext* pRenderContext);
     std::vector<ExportSample> buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const;
     void validateExportSamples(const std::vector<ExportSample>& samples, bool useCameraFrustum) const;
+    VolumeProjectionParams makeVolumeProjection(const ExportSample& sample, float viewCellRadius, float nearPlane, float farPlane) const;
     void exportOneSample(
         RenderContext* pRenderContext,
         const ExportSample& sample,
@@ -109,17 +122,20 @@ private:
     uint32_t mSamplesPerAxis = 5;
     float mVolumeExtentScale = 0.65f;
     float mSampleStepScale = 0.05f;
-    uint32_t mExportMode = 2; // 0 = GV only, 1 = PVV only, 2 = GV + PVV, 3 = metadata only
+    uint32_t mExportMode = 2; // 0 = Generate GV, 1 = Generate PVV, 2 = Generate GV + PVV, 3 = Render PVV
     bool mWriteDebugProjections = false;
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
     uint32_t mVisibilityMode = 1; // 0 = view cell, 1 = camera frustum
     float mCameraAspectRatio = 1.777778f;
+    uint32_t mVolumeMappingMode = 1; // 0 = world AABB, 1 = Unity view-cell projection
+    float mViewCellRadius = 0.3f;
+    float mViewCellNearPlane = 0.3f;
+    float mViewCellFarPlane = 30.0f;
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;
-    bool mPreviewWhileExporting = true;
     float mPreviewFps = 12.f;
     uint32_t mPreviewSampleIndex = 0;
     double mPreviewAccumulator = 0.0;
@@ -133,6 +149,10 @@ private:
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
+    uint32_t mRenderVolumeMappingMode = 0; // Read from metadata. Missing metadata means legacy world AABB.
+    float mRenderViewCellRadius = 0.3f;
+    float mRenderViewCellNearPlane = 0.3f;
+    float mRenderViewCellFarPlane = 30.0f;
     bool mRenderPVVCullScene = false;
     bool mRenderKeepOutsidePVVInView = true;
     bool mRenderPVVOverlay = false;

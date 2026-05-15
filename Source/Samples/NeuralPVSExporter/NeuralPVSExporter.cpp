@@ -235,7 +235,7 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
 
 void NeuralPVSExporter::onGuiRender(Gui* pGui)
 {
-    Gui::Window w(pGui, "NeuralPVS Exporter", {760, 760}, {20, 40});
+    Gui::Window w(pGui, "NeuralPVS Exporter", {760, 700}, {20, 40});
     renderGlobalUI(pGui);
 
     w.text("NeuralPVS Exporter");
@@ -247,43 +247,35 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.textbox("Scene path", mScenePathText);
             w.textbox("Dataset name", mDatasetName);
             w.textbox("Output root", mOutputRootText);
+            w.textbox("Predicted PVV folder", mPredictedPVVRootText);
         }
     }
 
     {
-        auto group = w.group("Sampling", true);
+        auto group = w.group("Unity Pipeline", true);
         if (group)
         {
-            Gui::DropdownList samplingModes = {
-                {0, "Grid"},
-                {1, "Path CSV"},
-            };
-            w.dropdown("Sampling mode", samplingModes, mSamplingMode);
-            w.textbox("Path CSV", mPathCsvText);
-
-            Gui::DropdownList visibilityModes = {
-                {0, "View cell rays"},
-                {1, "Camera frustum"},
-            };
-            w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
-            w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
-
-            w.var("Samples per axis", mSamplesPerAxis, 1u, 16u);
-            w.var("Volume extent scale", mVolumeExtentScale, 0.05f, 2.0f, 0.01f);
-            w.var("Sample step scale", mSampleStepScale, 0.001f, 0.5f, 0.001f);
-
             Gui::DropdownList exportModes = {
-                {0, "GV only"},
-                {1, "PVV only"},
-                {2, "GV + PVV"},
-                {3, "Metadata only"},
-                {4, "Render PVV"},
+                {0, "Generate GV"},
+                {1, "Generate PVV"},
+                {2, "Generate GV + PVV"},
+                {3, "Render PVV"},
             };
-            w.dropdown("Export mode", exportModes, mExportMode);
-            w.checkbox("Write debug projections", mWriteDebugProjections);
+            w.dropdown("Mode", exportModes, mExportMode);
 
-            uint64_t totalSamples = uint64_t(mSamplesPerAxis) * uint64_t(mSamplesPerAxis) * uint64_t(mSamplesPerAxis);
-            w.text("Total samples: " + std::to_string(totalSamples));
+            w.textbox("Camera path CSV", mPathCsvText);
+            w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
+            w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
+            w.var("View cell near", mViewCellNearPlane, 0.001f, 10.0f, 0.001f);
+            w.var("View cell far", mViewCellFarPlane, 0.1f, 1000.0f, 0.1f);
+
+            Gui::DropdownList pvvFilters = {
+                {1, "Exact"},
+                {2, "Box"},
+                {3, "Trilinear"},
+            };
+            w.dropdown("RenderPVV filter", pvvFilters, mRenderPVVFilter);
+            w.checkbox("Write debug projections", mWriteDebugProjections);
         }
     }
 
@@ -293,7 +285,6 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         {
             w.checkbox("Render scene preview", mRenderScenePreview);
             w.checkbox("Play path", mPreviewPlayback);
-            w.checkbox("Preview while exporting", mPreviewWhileExporting);
             w.var("Playback FPS", mPreviewFps, 0.5f, 60.0f, 0.5f);
 
             const uint32_t maxPreviewIndex = mPreviewSamples.empty() ? 0u : uint32_t(mPreviewSamples.size() - 1u);
@@ -332,64 +323,6 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         }
     }
 
-    {
-        auto group = w.group("Render PVV", true);
-        if (group)
-        {
-            w.textbox("Dataset root", mRenderDatasetRootText);
-            w.textbox("Predicted PVV folder", mPredictedPVVRootText);
-
-            Gui::DropdownList renderSources = {
-                {0, "Predicted PVV"},
-                {1, "Ground-truth PVV"},
-                {2, "Ground-truth GV"},
-            };
-            w.dropdown("Render source", renderSources, mRenderVolumeSource);
-
-            Gui::DropdownList pvvFilters = {
-                {1, "Exact"},
-                {2, "Box"},
-                {3, "Trilinear"},
-            };
-            w.dropdown("PVV filter", pvvFilters, mRenderPVVFilter);
-
-            const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
-            w.var("Sample", mRenderSampleIndex, 0u, maxRenderIndex);
-            w.checkbox("Cull scene with PVV", mRenderPVVCullScene);
-            w.checkbox("Keep outside PVV if in view", mRenderKeepOutsidePVVInView);
-            w.checkbox("Render volume overlay", mRenderPVVOverlay);
-            w.checkbox("Use sample camera", mRenderUseSampleCamera);
-            w.var("Overlay opacity", mRenderOpacity, 0.01f, 1.0f, 0.01f);
-            w.var("Ray step scale", mRenderStepScale, 0.25f, 4.0f, 0.05f);
-
-            if (w.button("Load Render Metadata"))
-            {
-                loadRenderMetadata();
-            }
-            if (w.button("Load Render Volume"))
-            {
-                loadRenderVolume();
-            }
-            if (w.button("Start RenderPVV Mode"))
-            {
-                startRenderPVVMode();
-            }
-            if (w.button("Previous render sample") && !mRenderSamples.empty())
-            {
-                mRenderSampleIndex = mRenderSampleIndex == 0u ? maxRenderIndex : mRenderSampleIndex - 1u;
-                loadRenderVolume();
-            }
-            if (w.button("Next render sample") && !mRenderSamples.empty())
-            {
-                mRenderSampleIndex = (mRenderSampleIndex + 1u) % (maxRenderIndex + 1u);
-                loadRenderVolume();
-            }
-
-            w.text("Render samples: " + std::to_string(mRenderSamples.size()));
-            w.text(mRenderStatus);
-        }
-    }
-
     w.separator();
 
     if (w.button("Load Scene"))
@@ -407,10 +340,18 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
     }
 
-    if (w.button("Export Selected Mode") && !mProgressiveExportActive)
+    if (w.button("Run Mode") && !mProgressiveExportActive)
     {
+        mSamplingMode = 1;
+        mVisibilityMode = 1;
+        mVolumeMappingMode = 1;
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
+        mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
+        mRenderVolumeSource = 0;
+        mRenderUseSampleCamera = true;
+        mRenderKeepOutsidePVVInView = true;
+        mRenderPVVOverlay = false;
 
         loadScene(mScenePath);
         createResources();
@@ -419,18 +360,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createPVVPass();
         createPVVRenderPass();
 
-        if (mExportMode == 4)
+        if (mExportMode == 3)
         {
-            mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
             startRenderPVVMode();
-        }
-        else if (mPreviewWhileExporting)
-        {
-            startProgressiveExport();
         }
         else
         {
-            exportSceneVolumes(getRenderContext());
+            startProgressiveExport();
         }
     }
 
@@ -438,6 +374,11 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
     w.text("Scene: " + mScenePath.string());
     w.text("Output: " + (mOutputRoot / mDatasetName).string());
+    if (mExportMode == 3)
+    {
+        w.text("Predicted PVV: " + std::filesystem::path(mPredictedPVVRootText).string());
+        w.text(mRenderStatus);
+    }
     w.text(mLastExportStatus);
 }
 bool NeuralPVSExporter::onKeyEvent(const KeyboardEvent& keyEvent)
@@ -579,6 +520,8 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
 
     uint32_t enableRenderPVV = 0u;
     float3 renderVolumeMin = float3(0.f);
+    VolumeProjectionParams renderProjection;
+    uint32_t renderVolumeMappingMode = 0u;
     if (mRenderPVVCullScene && !mRenderSamples.empty())
     {
         if (mRenderUseSampleCamera && !mPreviewSamples.empty())
@@ -588,7 +531,15 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
 
         ensureRenderVolumeLoaded(false);
         mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
-        renderVolumeMin = mRenderSamples[mRenderSampleIndex].center - mRenderVolumeExtent * 0.5f;
+        const ExportSample& renderSample = mRenderSamples[mRenderSampleIndex];
+        renderVolumeMin = renderSample.center - mRenderVolumeExtent * 0.5f;
+        renderProjection = makeVolumeProjection(
+            renderSample,
+            mRenderViewCellRadius,
+            mRenderViewCellNearPlane,
+            mRenderViewCellFarPlane
+        );
+        renderVolumeMappingMode = mRenderVolumeMappingMode == 1u && renderSample.hasCamera ? 1u : 0u;
         enableRenderPVV = mpRenderVolume ? 1u : 0u;
     }
 
@@ -609,6 +560,15 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     previewRoot["PreviewCB"]["gRenderPVVSource"] = mRenderVolumeSource;
     previewRoot["PreviewCB"]["gKeepOutsidePVVInView"] = mRenderKeepOutsidePVVInView ? 1u : 0u;
     previewRoot["PreviewCB"]["gMainCamViewProj"] = mpCamera->getViewProjMatrix();
+    previewRoot["PreviewCB"]["gRenderVolumeMappingMode"] = renderVolumeMappingMode;
+    previewRoot["PreviewCB"]["gViewCellPosition"] = renderProjection.viewCellPosition;
+    previewRoot["PreviewCB"]["gViewCellForward"] = renderProjection.forward;
+    previewRoot["PreviewCB"]["gViewCellRight"] = renderProjection.right;
+    previewRoot["PreviewCB"]["gViewCellUp"] = renderProjection.up;
+    previewRoot["PreviewCB"]["gViewCellNearPlane"] = renderProjection.nearPlane;
+    previewRoot["PreviewCB"]["gViewCellFarPlane"] = renderProjection.farPlane;
+    previewRoot["PreviewCB"]["gTanHalfFovX"] = renderProjection.tanHalfFovX;
+    previewRoot["PreviewCB"]["gTanHalfFovY"] = renderProjection.tanHalfFovY;
 
     mpPreviewPass->getState()->setFbo(pTargetFbo);
     mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
@@ -689,10 +649,25 @@ void NeuralPVSExporter::loadRenderMetadata()
     float3 volumeExtent = float3(1.f);
     uint32_t volumeSize = mVolumeSize;
     uint32_t volumeDepth = mVolumeDepth;
+    uint32_t volumeMappingMode = 0u;
+    float cameraAspectRatio = mCameraAspectRatio;
+    float viewCellRadius = mViewCellRadius;
+    float viewCellNearPlane = mViewCellNearPlane;
+    float viewCellFarPlane = mViewCellFarPlane;
 
     std::string line;
     while (std::getline(metadata, line))
     {
+        if (line.find("\"volume_mapping\"") != std::string::npos && line.find("unity_projection") != std::string::npos)
+        {
+            volumeMappingMode = 1u;
+        }
+
+        extractFloatFromLine(line, "\"camera_aspect_ratio\"", cameraAspectRatio);
+        extractFloatFromLine(line, "\"view_cell_radius\"", viewCellRadius);
+        extractFloatFromLine(line, "\"view_cell_near\"", viewCellNearPlane);
+        extractFloatFromLine(line, "\"view_cell_far\"", viewCellFarPlane);
+
         std::vector<float> volumeSizeValues = extractFloatArrayFromLine(line, "\"volume_size\"");
         if (volumeSizeValues.size() >= 3)
         {
@@ -744,6 +719,11 @@ void NeuralPVSExporter::loadRenderMetadata()
     mRenderVolumeExtent = volumeExtent;
     mRenderVolumeSize = volumeSize;
     mRenderVolumeDepth = volumeDepth;
+    mRenderVolumeMappingMode = volumeMappingMode;
+    mCameraAspectRatio = std::max(0.1f, cameraAspectRatio);
+    mRenderViewCellRadius = std::max(0.001f, viewCellRadius);
+    mRenderViewCellNearPlane = std::max(0.001f, viewCellNearPlane);
+    mRenderViewCellFarPlane = std::max(mRenderViewCellNearPlane + 0.001f, viewCellFarPlane);
     mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
     mRenderLoadedSampleIndex = 0xffffffffu;
     mRenderLoadedVolumeSource = 0xffffffffu;
@@ -800,7 +780,6 @@ void NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewSamples = mRenderSamples;
         mPreviewSampleIndex = mRenderSampleIndex;
-        mPreviewPlayback = false;
         applyPreviewSample();
     }
 
@@ -813,6 +792,8 @@ void NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 
 void NeuralPVSExporter::startRenderPVVMode()
 {
+    mRenderDatasetRootText = (std::filesystem::path(mOutputRootText) / mDatasetName).string();
+    mRenderVolumeSource = 0u;
     loadRenderMetadata();
 
     mRenderPVVCullScene = true;
@@ -824,11 +805,11 @@ void NeuralPVSExporter::startRenderPVVMode()
     mPreviewSamples = mRenderSamples;
     mPreviewSampleIndex = 0;
     mPreviewAccumulator = 0.0;
-    mPreviewPlayback = false;
+    mPreviewPlayback = true;
     applyPreviewSample();
     ensureRenderVolumeLoaded(true);
 
-    mRenderStatus = "RenderPVV mode ready. Use Play path to walk through predicted PVV samples.";
+    mRenderStatus = "RenderPVV mode running through predicted PVV samples.";
     mLastExportStatus = mRenderStatus;
 }
 
@@ -921,6 +902,34 @@ void NeuralPVSExporter::validateExportSamples(const std::vector<ExportSample>& s
     }
 }
 
+NeuralPVSExporter::VolumeProjectionParams NeuralPVSExporter::makeVolumeProjection(
+    const ExportSample& sample,
+    float viewCellRadius,
+    float nearPlane,
+    float farPlane
+) const
+{
+    VolumeProjectionParams params;
+
+    const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
+    const float aspectRatio = std::max(0.1f, mCameraAspectRatio);
+    const float tanHalfOffsetFov = std::max(0.0001f, std::tan(0.5f * fovYRadians / aspectRatio));
+    const float viewCellOffset = std::max(0.0f, viewCellRadius) / tanHalfOffsetFov;
+
+    params.forward = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
+    const float3 upHint = std::abs(params.forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
+    params.right = normalizedOrDefault(cross(upHint, params.forward), float3(1.f, 0.f, 0.f));
+    params.up = normalizedOrDefault(cross(params.forward, params.right), upHint);
+
+    params.viewCellPosition = sample.center - params.forward * viewCellOffset;
+    params.nearPlane = std::max(0.001f, nearPlane);
+    params.farPlane = std::max(params.nearPlane + 0.001f, farPlane + 2.0f * viewCellOffset);
+    params.tanHalfFovY = std::max(0.0001f, std::tan(0.5f * fovYRadians));
+    params.tanHalfFovX = params.tanHalfFovY * aspectRatio;
+
+    return params;
+}
+
 void NeuralPVSExporter::startProgressiveExport()
 {
     mProgressiveSceneBounds = mpScene->getSceneBounds();
@@ -928,7 +937,7 @@ void NeuralPVSExporter::startProgressiveExport()
     mProgressiveSceneExtent = max(mProgressiveSceneBounds.extent(), float3(0.0001f));
     mProgressiveVolumeExtent = mProgressiveSceneExtent * mVolumeExtentScale;
     mProgressiveSampleStep = mProgressiveSceneExtent * mSampleStepScale;
-    mProgressiveViewCellRadius = std::max(0.1f, mProgressiveSceneBounds.radius() * 0.02f);
+    mProgressiveViewCellRadius = std::max(0.001f, mViewCellRadius);
     mProgressiveUseCameraFrustum = mVisibilityMode == 1;
 
     mProgressiveExportSamples = buildExportSamples(mProgressiveSceneCenter, mProgressiveSceneExtent);
@@ -1021,6 +1030,9 @@ void NeuralPVSExporter::exportOneSample(
     const float3 viewCellCenter = sample.center;
     const float3 volumeMin = viewCellCenter - volumeExtent * 0.5f;
     const bool useCameraFrustum = mVisibilityMode == 1;
+    const bool useProjectionVolume = mVolumeMappingMode == 1 && sample.hasCamera;
+    const VolumeProjectionParams volumeProjection =
+        makeVolumeProjection(sample, viewCellRadius, mViewCellNearPlane, mViewCellFarPlane);
 
     pRenderContext->clearUAV(mpGVVolume->getUAV().get(), uint4(0, 0, 0, 0));
     pRenderContext->clearUAV(mpPVVVolume->getUAV().get(), uint4(0, 0, 0, 0));
@@ -1032,6 +1044,15 @@ void NeuralPVSExporter::exportOneSample(
     gvRoot["ExporterCB"]["gSceneExtent"] = volumeExtent;
     gvRoot["ExporterCB"]["gVolumeSize"] = mVolumeSize;
     gvRoot["ExporterCB"]["gVolumeDepth"] = mVolumeDepth;
+    gvRoot["ExporterCB"]["gUseProjectionVolume"] = useProjectionVolume ? 1u : 0u;
+    gvRoot["ExporterCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
+    gvRoot["ExporterCB"]["gViewCellForward"] = volumeProjection.forward;
+    gvRoot["ExporterCB"]["gViewCellRight"] = volumeProjection.right;
+    gvRoot["ExporterCB"]["gViewCellUp"] = volumeProjection.up;
+    gvRoot["ExporterCB"]["gViewCellNearPlane"] = volumeProjection.nearPlane;
+    gvRoot["ExporterCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
+    gvRoot["ExporterCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
+    gvRoot["ExporterCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
 
     mpGVPass->getState()->setFbo(mpGVFbo);
     mpScene->rasterize(pRenderContext, mpGVPass->getState().get(), mpGVPass->getVars().get());
@@ -1052,6 +1073,15 @@ void NeuralPVSExporter::exportOneSample(
     pvvRoot["PVVCB"]["gCameraFovYRadians"] = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     pvvRoot["PVVCB"]["gCameraAspectRatio"] = std::max(0.1f, mCameraAspectRatio);
     pvvRoot["PVVCB"]["gCameraForward"] = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
+    pvvRoot["PVVCB"]["gUseProjectionVolume"] = useProjectionVolume ? 1u : 0u;
+    pvvRoot["PVVCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
+    pvvRoot["PVVCB"]["gViewCellForward"] = volumeProjection.forward;
+    pvvRoot["PVVCB"]["gViewCellRight"] = volumeProjection.right;
+    pvvRoot["PVVCB"]["gViewCellUp"] = volumeProjection.up;
+    pvvRoot["PVVCB"]["gViewCellNearPlane"] = volumeProjection.nearPlane;
+    pvvRoot["PVVCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
+    pvvRoot["PVVCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
+    pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
 
     mpPVVPass->execute(pRenderContext, mVolumeSize / 32, mVolumeSize, mVolumeDepth);
     pRenderContext->submit(true);
@@ -1100,8 +1130,12 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
     metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
     metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "camera_frustum" : "view_cell") << "\",\n";
+    metadata << "  \"volume_mapping\": \"" << (mVolumeMappingMode == 1 ? "unity_projection" : "world_aabb") << "\",\n";
     metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
     metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
+    metadata << "  \"view_cell_radius\": " << mViewCellRadius << ",\n";
+    metadata << "  \"view_cell_near\": " << mViewCellNearPlane << ",\n";
+    metadata << "  \"view_cell_far\": " << mViewCellFarPlane << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
@@ -1140,158 +1174,30 @@ void NeuralPVSExporter::exportSceneVolumes(RenderContext* pRenderContext)
     const float3 sceneExtent = max(sceneBounds.extent(), float3(0.0001f));
 
     const float3 volumeExtent = sceneExtent * mVolumeExtentScale;
-    const float viewCellRadius = std::max(0.1f, sceneBounds.radius() * 0.02f);
+    const float viewCellRadius = std::max(0.001f, mViewCellRadius);
     const float3 sampleStep = sceneExtent * mSampleStepScale;
 
-    std::vector<ExportSample> samples;
-    if (mSamplingMode == 1)
-    {
-        samples = loadPathSamples(std::filesystem::path(mPathCsvText));
-    }
-    else
-    {
-        const uint32_t samplesPerAxis = mSamplesPerAxis < 1u ? 1u : mSamplesPerAxis;
-        samples.reserve(size_t(samplesPerAxis) * size_t(samplesPerAxis) * size_t(samplesPerAxis));
-
-        const float centerOffset = 0.5f * float(samplesPerAxis - 1u);
-        for (uint32_t z = 0; z < samplesPerAxis; ++z)
-        {
-            for (uint32_t y = 0; y < samplesPerAxis; ++y)
-            {
-                for (uint32_t x = 0; x < samplesPerAxis; ++x)
-                {
-                    const float3 offset = float3(float(x) - centerOffset, float(y) - centerOffset, float(z) - centerOffset);
-                    ExportSample sample;
-                    sample.center = sceneCenter + offset * sampleStep;
-                    samples.push_back(sample);
-                }
-            }
-        }
-    }
-
     const bool useCameraFrustum = mVisibilityMode == 1;
-    if (useCameraFrustum)
-    {
-        if (mSamplingMode != 1)
-        {
-            FALCOR_THROW("Camera frustum visibility requires Path CSV sampling.");
-        }
-
-        const bool allSamplesHaveCamera = std::all_of(samples.begin(), samples.end(), [](const ExportSample& sample) { return sample.hasCamera; });
-        if (!allSamplesHaveCamera)
-        {
-            FALCOR_THROW("Camera frustum visibility requires CSV columns forward_x, forward_y, forward_z, and fov.");
-        }
-    }
+    const std::vector<ExportSample> samples = buildExportSamples(sceneCenter, sceneExtent);
+    validateExportSamples(samples, useCameraFrustum);
 
     std::vector<uint64_t> gvBitCounts;
     std::vector<uint64_t> pvvBitCounts;
     gvBitCounts.reserve(samples.size());
     pvvBitCounts.reserve(samples.size());
+
     for (uint32_t sampleIndex = 0; sampleIndex < static_cast<uint32_t>(samples.size()); ++sampleIndex)
     {
-        const ExportSample& sample = samples[sampleIndex];
-        const float3 viewCellCenter = sample.center;
-        const float3 volumeMin = viewCellCenter - volumeExtent * 0.5f;
-
-        pRenderContext->clearUAV(mpGVVolume->getUAV().get(), uint4(0, 0, 0, 0));
-        pRenderContext->clearUAV(mpPVVVolume->getUAV().get(), uint4(0, 0, 0, 0));
-        pRenderContext->clearFbo(mpGVFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::All);
-
-        auto gvRoot = mpGVPass->getRootVar();
-        gvRoot["gGeometryVolume"] = mpGVVolume;
-        gvRoot["ExporterCB"]["gSceneMin"] = volumeMin;
-        gvRoot["ExporterCB"]["gSceneExtent"] = volumeExtent;
-        gvRoot["ExporterCB"]["gVolumeSize"] = mVolumeSize;
-        gvRoot["ExporterCB"]["gVolumeDepth"] = mVolumeDepth;
-
-        mpGVPass->getState()->setFbo(mpGVFbo);
-        mpScene->rasterize(pRenderContext, mpGVPass->getState().get(), mpGVPass->getVars().get());
-
-        auto pvvRoot = mpPVVPass->getRootVar();
-        mpScene->bindShaderDataForRaytracing(pRenderContext, pvvRoot["gScene"]);
-
-        pvvRoot["gGeometryVolume"] = mpGVVolume;
-        pvvRoot["gPVVVolume"] = mpPVVVolume;
-        pvvRoot["PVVCB"]["gSceneMin"] = volumeMin;
-        pvvRoot["PVVCB"]["gSceneExtent"] = volumeExtent;
-        pvvRoot["PVVCB"]["gVolumeSize"] = mVolumeSize;
-        pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
-        pvvRoot["PVVCB"]["gViewCellCenter"] = viewCellCenter;
-        pvvRoot["PVVCB"]["gViewCellRadius"] = viewCellRadius;
-        pvvRoot["PVVCB"]["gSampleCount"] = useCameraFrustum ? 1u : 9u;
-        pvvRoot["PVVCB"]["gUseCameraFrustum"] = useCameraFrustum ? 1u : 0u;
-        pvvRoot["PVVCB"]["gCameraFovYRadians"] = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
-        pvvRoot["PVVCB"]["gCameraAspectRatio"] = std::max(0.1f, mCameraAspectRatio);
-        pvvRoot["PVVCB"]["gCameraForward"] = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
-
-        mpPVVPass->execute(pRenderContext, mVolumeSize / 32, mVolumeSize, mVolumeDepth);
-        pRenderContext->submit(true);
-
-        std::vector<uint8_t> gvBytes = pRenderContext->readTextureSubresource(mpGVVolume.get(), 0);
-        std::vector<uint8_t> pvvBytes = pRenderContext->readTextureSubresource(mpPVVVolume.get(), 0);
-
-        writeVolumePair(gvBytes, pvvBytes, mDatasetName, sampleIndex);
-        if (mWriteDebugProjections)
-        {
-            const std::filesystem::path datasetRoot = mOutputRoot / mDatasetName;
-
-            if (mExportMode == 0 || mExportMode == 2)
-            {
-                writeDebugProjections(datasetRoot, gvBytes, "gv", sampleIndex);
-            }
-
-            if (mExportMode == 1 || mExportMode == 2)
-            {
-                writeDebugProjections(datasetRoot, pvvBytes, "pvv", sampleIndex);
-            }
-        }
-        gvBitCounts.push_back(countSetBits(gvBytes));
-        pvvBitCounts.push_back(countSetBits(pvvBytes));
+        uint64_t gvBitCount = 0;
+        uint64_t pvvBitCount = 0;
+        exportOneSample(pRenderContext, samples[sampleIndex], sampleIndex, volumeExtent, viewCellRadius, gvBitCount, pvvBitCount);
+        gvBitCounts.push_back(gvBitCount);
+        pvvBitCounts.push_back(pvvBitCount);
 
         mLastExportStatus = "Exported sample " + std::to_string(sampleIndex) + " / " + std::to_string(samples.size() - 1);
     }
-    const std::filesystem::path datasetRoot = mOutputRoot / mDatasetName;
-    std::filesystem::create_directories(datasetRoot);
 
-    std::ofstream metadata(datasetRoot / "metadata.json");
-    metadata << "{\n";
-    metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
-    metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
-    metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
-    metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "camera_frustum" : "view_cell") << "\",\n";
-    metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
-    metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
-    metadata << "  \"sample_count\": " << samples.size() << ",\n";
-    metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
-    metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
-    metadata << "  \"scene_bounds_max\": [" << sceneBounds.maxPoint.x << ", " << sceneBounds.maxPoint.y << ", " << sceneBounds.maxPoint.z << "],\n";
-    metadata << "  \"scene_center\": [" << sceneCenter.x << ", " << sceneCenter.y << ", " << sceneCenter.z << "],\n";
-    metadata << "  \"scene_extent\": [" << sceneExtent.x << ", " << sceneExtent.y << ", " << sceneExtent.z << "],\n";
-    metadata << "  \"volume_extent\": [" << volumeExtent.x << ", " << volumeExtent.y << ", " << volumeExtent.z << "],\n";
-    metadata << "  \"sample_step\": [" << sampleStep.x << ", " << sampleStep.y << ", " << sampleStep.z << "],\n";
-    metadata << "  \"samples\": [\n";
-
-    for (size_t i = 0; i < samples.size(); ++i)
-    {
-        metadata << "    {";
-        metadata << "\"index\": " << i << ", ";
-        metadata << "\"center\": [" << samples[i].center.x << ", " << samples[i].center.y << ", " << samples[i].center.z << "], ";
-        metadata << "\"has_camera\": " << (samples[i].hasCamera ? "true" : "false") << ", ";
-        metadata << "\"forward\": [" << samples[i].forward.x << ", " << samples[i].forward.y << ", " << samples[i].forward.z << "], ";
-        metadata << "\"fov_y_degrees\": " << samples[i].fovYDegrees << ", ";
-        metadata << "\"gv_file\": \"gv/" << std::setw(4) << std::setfill('0') << i << "_gv.bin.gz\", ";
-        metadata << "\"pvv_file\": \"pvv/" << std::setw(4) << std::setfill('0') << i << "_pvv.bin.gz\", ";
-        metadata << "\"gv_set_bits\": " << gvBitCounts[i] << ", ";
-        metadata << "\"pvv_set_bits\": " << pvvBitCounts[i];
-        metadata << "}";
-        if (i + 1 < samples.size()) metadata << ",";
-        metadata << "\n";
-    }
-
-    metadata << "  ]\n";
-    metadata << "}\n";
-
+    writeExportMetadata(samples, gvBitCounts, pvvBitCounts, sceneBounds, sceneCenter, sceneExtent, volumeExtent, sampleStep, useCameraFrustum);
     mLastExportStatus = "Exported " + std::to_string(samples.size()) + " " + mDatasetName + " samples with metadata.";
 }
 

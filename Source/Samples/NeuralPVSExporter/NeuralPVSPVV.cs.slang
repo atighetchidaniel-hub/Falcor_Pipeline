@@ -17,6 +17,18 @@ cbuffer PVVCB
     float gCameraAspectRatio;
     float3 gCameraForward;
     uint gPadding0;
+    uint gUseProjectionVolume;
+    float gViewCellNearPlane;
+    float gViewCellFarPlane;
+    float gTanHalfFovX;
+    float3 gViewCellPosition;
+    float gTanHalfFovY;
+    float3 gViewCellForward;
+    uint gPadding1;
+    float3 gViewCellRight;
+    uint gPadding2;
+    float3 gViewCellUp;
+    uint gPadding3;
 };
 
 float3 getSampleOffset(uint sampleIndex)
@@ -61,6 +73,22 @@ bool isInsideCameraFrustum(float3 origin, float3 voxelWorld)
     return horizontal <= tanHalfX && vertical <= tanHalfY;
 }
 
+float3 voxelToWorld(uint x, uint y, uint z)
+{
+    float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f) / float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth));
+    if (gUseProjectionVolume == 0u)
+        return gSceneMin + voxel01 * gSceneExtent;
+
+    float depth = lerp(gViewCellNearPlane, gViewCellFarPlane, voxel01.z);
+    float xNdc = voxel01.x * 2.0f - 1.0f;
+    float yNdc = voxel01.y * 2.0f - 1.0f;
+
+    return gViewCellPosition +
+        normalize(gViewCellForward) * depth +
+        normalize(gViewCellRight) * (xNdc * depth * gTanHalfFovX) +
+        normalize(gViewCellUp) * (yNdc * depth * gTanHalfFovY);
+}
+
 [numthreads(4, 4, 4)]
 void main(uint3 id : SV_DispatchThreadID)
 {
@@ -78,8 +106,7 @@ void main(uint3 id : SV_DispatchThreadID)
         if ((word & bitMask) == 0u) continue;
 
         uint x = id.x * 32u + bit;
-        float3 voxel01 = (float3(float(x), float(id.y), float(id.z)) + 0.5f) / float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth));
-        float3 voxelWorld = gSceneMin + voxel01 * gSceneExtent;
+        float3 voxelWorld = voxelToWorld(x, id.y, id.z);
 
         bool visible = false;
         for (uint sampleIndex = 0; sampleIndex < gSampleCount && !visible; ++sampleIndex)

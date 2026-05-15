@@ -8,6 +8,18 @@ cbuffer ExporterCB
     uint gVolumeSize;
     float3 gSceneExtent;
     uint gVolumeDepth;
+    uint gUseProjectionVolume;
+    float gViewCellNearPlane;
+    float gViewCellFarPlane;
+    float gTanHalfFovX;
+    float3 gViewCellPosition;
+    float gTanHalfFovY;
+    float3 gViewCellForward;
+    uint gPadding0;
+    float3 gViewCellRight;
+    uint gPadding1;
+    float3 gViewCellUp;
+    uint gPadding2;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -15,11 +27,30 @@ VSOut vsMain(VSIn vIn)
     return defaultVS(vIn);
 }
 
+bool worldToVolume01(float3 worldPos, out float3 p)
+{
+    if (gUseProjectionVolume == 0u)
+    {
+        p = (worldPos - gSceneMin) / gSceneExtent;
+        return all(p >= 0.0f) && all(p <= 1.0f);
+    }
+
+    float3 rel = worldPos - gViewCellPosition;
+    float depth = dot(rel, normalize(gViewCellForward));
+    if (depth < gViewCellNearPlane || depth > gViewCellFarPlane)
+        return false;
+
+    float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
+    float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane));
+
+    return all(p >= 0.0f) && all(p <= 1.0f);
+}
+
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
-    float3 p = (vsOut.posW - gSceneMin) / gSceneExtent;
-
-    if (all(p >= 0.0f) && all(p <= 1.0f))
+    float3 p = float3(0.0f);
+    if (worldToVolume01(vsOut.posW, p))
     {
         uint x = min((uint)floor(p.x * (float)gVolumeSize), gVolumeSize - 1);
         uint y = min((uint)floor(p.y * (float)gVolumeSize), gVolumeSize - 1);
