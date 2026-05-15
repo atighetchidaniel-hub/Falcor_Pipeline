@@ -12,6 +12,7 @@
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 
 FALCOR_EXPORT_D3D12_AGILITY_SDK
 
@@ -243,6 +244,12 @@ namespace
 
         return executableName;
     }
+
+    void removeDirectoryQuietly(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
 }
 
 NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config) : SampleApp(config) {}
@@ -282,7 +289,7 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
         renderPVVOverlay(pRenderContext, pTargetFbo);
     }
 
-    if (mRenderPVVCullScene && mRenderExportFrames)
+    if (mRenderPVVCullScene && mRenderExportFrames && mPreviewPlayback && !mRenderPVVFinished)
     {
         captureRenderFrame(pTargetFbo);
     }
@@ -344,7 +351,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             }
 
             Gui::DropdownList pvvFilters = {
-                {1, "Exact"},
+                {1, "None"},
                 {2, "Box"},
                 {3, "Trilinear"},
             };
@@ -410,13 +417,17 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
     }
 
-    const bool modeRunning = isModeRunning();
-    if (w.button(modeRunning ? "Stop" : "Start"))
+    if (w.button("Start"))
     {
-        if (modeRunning)
+        if (isModeRunning())
             stopCurrentMode();
-        else
-            startSelectedMode();
+
+        startSelectedMode();
+    }
+
+    if (w.button("Stop"))
+    {
+        stopCurrentMode();
     }
 
     w.separator();
@@ -914,22 +925,22 @@ void NeuralPVSExporter::stopCurrentMode()
         return;
     }
 
-    if (mExportMode == 3 && mRenderPVVCullScene)
+    if (mRenderPVVCullScene)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
         mRenderPVVFinished = true;
+        mRenderPVVCullScene = false;
 
-        const std::string prefix = "RenderPVV stopped at sample " + std::to_string(mRenderSampleIndex) + ".";
-        if (mRenderExportFrames && mRenderFrameExportMode == 1u && mRenderCapturedFrameCount > 0u)
+        if (mRenderFrameExportMode == 1u)
         {
-            encodeRenderVideo(prefix);
+            removeDirectoryQuietly(getRenderFrameStagingPath());
         }
-        else
-        {
-            mRenderStatus = prefix + (mRenderExportFrames ? " Frames saved to " + getRenderFrameOutputPath().string() : "");
-            mLastExportStatus = mRenderStatus;
-        }
+
+        mRenderStatus =
+            "RenderPVV stopped at sample " + std::to_string(mRenderSampleIndex) +
+            (mRenderExportFrames && mRenderFrameExportMode == 0u ? ". Frames saved to " + getRenderFrameOutputPath().string() : ".");
+        mLastExportStatus = mRenderStatus;
         return;
     }
 
@@ -963,9 +974,11 @@ void NeuralPVSExporter::startRenderPVVMode()
 
     if (mRenderExportFrames)
     {
+        removeDirectoryQuietly(getRenderFrameOutputPath() / "_frames");
         std::filesystem::create_directories(getRenderFrameOutputPath());
         if (mRenderFrameExportMode == 1u)
         {
+            removeDirectoryQuietly(getRenderFrameStagingPath());
             std::filesystem::create_directories(getRenderFrameStagingPath());
         }
     }
@@ -1027,7 +1040,7 @@ std::filesystem::path NeuralPVSExporter::getRenderFrameOutputPath() const
 
 std::filesystem::path NeuralPVSExporter::getRenderFrameStagingPath() const
 {
-    return getRenderFrameOutputPath() / "_frames";
+    return std::filesystem::temp_directory_path() / "FalcorNeuralPVS" / mDatasetName / "renderpvv_frames";
 }
 
 std::filesystem::path NeuralPVSExporter::getRenderVideoOutputPath() const
@@ -1102,9 +1115,9 @@ void NeuralPVSExporter::encodeRenderVideo(const std::string& completionPrefix)
     int result = std::system(nvencCommand.str().c_str());
     if (result == 0)
     {
+        removeDirectoryQuietly(getRenderFrameStagingPath());
         mRenderStatus =
-            completionPrefix + " Lossless video saved to " + videoPath.string() +
-            ". Source frames: " + getRenderFrameStagingPath().string();
+            completionPrefix + " Lossless video saved to " + videoPath.string() + ".";
     }
     else
     {
@@ -1119,9 +1132,10 @@ void NeuralPVSExporter::encodeRenderVideo(const std::string& completionPrefix)
         result = std::system(ffv1Command.str().c_str());
         if (result == 0)
         {
+            removeDirectoryQuietly(getRenderFrameStagingPath());
             mRenderStatus =
                 completionPrefix + " Lossless video saved to " + videoPath.string() +
-                " using FFV1 fallback. Source frames: " + getRenderFrameStagingPath().string();
+                " using FFV1 fallback.";
         }
         else
         {
