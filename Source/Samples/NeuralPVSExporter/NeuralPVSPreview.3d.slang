@@ -1,12 +1,102 @@
 import Scene.Raster;
 
+Texture3D<uint> gRenderPVVVolume;
+
+cbuffer PreviewCB
+{
+    float3 gRenderPVVVolumeMin;
+    uint gRenderPVVVolumeSize;
+    float3 gRenderPVVVolumeExtent;
+    uint gRenderPVVVolumeDepth;
+    uint gEnableRenderPVV;
+    uint gPVVFilter;
+    uint gRenderPVVSource;
+    uint gPreviewPadding0;
+};
+
 VSOut vsMain(VSIn vIn)
 {
     return defaultVS(vIn);
 }
 
+bool loadPVVBit(uint3 voxel)
+{
+    if (voxel.x >= gRenderPVVVolumeSize || voxel.y >= gRenderPVVVolumeSize || voxel.z >= gRenderPVVVolumeDepth)
+        return false;
+
+    uint wordX = voxel.x / 32u;
+    uint bitInWord = voxel.x % 32u;
+    uint bitMask = 1u << (31u - bitInWord);
+
+    return (gRenderPVVVolume.Load(int4(int(wordX), int(voxel.y), int(voxel.z), 0)) & bitMask) != 0u;
+}
+
+bool loadPVVBitClamped(int3 voxel)
+{
+    int maxX = int(gRenderPVVVolumeSize) - 1;
+    int maxY = int(gRenderPVVVolumeSize) - 1;
+    int maxZ = int(gRenderPVVVolumeDepth) - 1;
+    if (voxel.x < 0 || voxel.y < 0 || voxel.z < 0 || voxel.x > maxX || voxel.y > maxY || voxel.z > maxZ)
+        return false;
+
+    return loadPVVBit(uint3(uint(voxel.x), uint(voxel.y), uint(voxel.z)));
+}
+
+bool isVisibleInPVV(float3 worldPos)
+{
+    if (gEnableRenderPVV == 0u)
+        return true;
+
+    float3 p = (worldPos - gRenderPVVVolumeMin) / gRenderPVVVolumeExtent;
+    if (any(p < 0.0f) || any(p > 1.0f))
+        return false;
+
+    float3 gridPos = p * float3(float(gRenderPVVVolumeSize), float(gRenderPVVVolumeSize), float(gRenderPVVVolumeDepth));
+    uint x = min((uint)floor(gridPos.x), gRenderPVVVolumeSize - 1u);
+    uint y = min((uint)floor(gridPos.y), gRenderPVVVolumeSize - 1u);
+    uint z = min((uint)floor(gridPos.z), gRenderPVVVolumeDepth - 1u);
+
+    if (gPVVFilter <= 1u)
+        return loadPVVBit(uint3(x, y, z));
+
+    if (gPVVFilter == 2u)
+    {
+        int3 center = int3(int(x), int(y), int(z));
+        for (int dz = -1; dz <= 1; ++dz)
+        {
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    if (loadPVVBitClamped(center + int3(dx, dy, dz)))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    int3 baseVoxel = int3(floor(gridPos - 0.5f));
+    for (int dz = 0; dz <= 1; ++dz)
+    {
+        for (int dy = 0; dy <= 1; ++dy)
+        {
+            for (int dx = 0; dx <= 1; ++dx)
+            {
+                if (loadPVVBitClamped(baseVoxel + int3(dx, dy, dz)))
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
+    if (!isVisibleInPVV(vsOut.posW))
+        discard;
+
     float3 n = normalize(vsOut.normalW);
     float3 lightDir = normalize(float3(-0.35f, 0.7f, -0.55f));
     float shade = saturate(dot(n, lightDir)) * 0.75f + 0.18f;

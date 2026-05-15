@@ -1,4 +1,5 @@
 #include "NeuralPVSExporter.h"
+#include "Core/Platform/OS.h"
 #include "Utils/Math/FalcorMath.h"
 
 #include <algorithm>
@@ -68,17 +69,6 @@ namespace
 
         writeLE32(out, crc32(data));
         writeLE32(out, static_cast<uint32_t>(data.size()));
-    }
-
-    uint16_t readLE16(const std::vector<uint8_t>& data, size_t offset)
-    {
-        return uint16_t(data[offset]) | (uint16_t(data[offset + 1]) << 8);
-    }
-
-    uint32_t readLE32(const std::vector<uint8_t>& data, size_t offset)
-    {
-        return uint32_t(data[offset]) | (uint32_t(data[offset + 1]) << 8) | (uint32_t(data[offset + 2]) << 16) |
-               (uint32_t(data[offset + 3]) << 24);
     }
 
     std::string fourDigitName(uint32_t index, const std::string& suffix)
@@ -287,6 +277,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 {1, "PVV only"},
                 {2, "GV + PVV"},
                 {3, "Metadata only"},
+                {4, "Render PVV"},
             };
             w.dropdown("Export mode", exportModes, mExportMode);
             w.checkbox("Write debug projections", mWriteDebugProjections);
@@ -346,15 +337,25 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         if (group)
         {
             w.textbox("Dataset root", mRenderDatasetRootText);
+            w.textbox("Predicted PVV folder", mPredictedPVVRootText);
 
-            Gui::DropdownList renderKinds = {
-                {0, "GV"},
-                {1, "PVV"},
+            Gui::DropdownList renderSources = {
+                {0, "Predicted PVV"},
+                {1, "Ground-truth PVV"},
+                {2, "Ground-truth GV"},
             };
-            w.dropdown("Volume", renderKinds, mRenderVolumeKind);
+            w.dropdown("Render source", renderSources, mRenderVolumeSource);
+
+            Gui::DropdownList pvvFilters = {
+                {1, "Exact"},
+                {2, "Box"},
+                {3, "Trilinear"},
+            };
+            w.dropdown("PVV filter", pvvFilters, mRenderPVVFilter);
 
             const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
             w.var("Sample", mRenderSampleIndex, 0u, maxRenderIndex);
+            w.checkbox("Cull scene with PVV", mRenderPVVCullScene);
             w.checkbox("Render volume overlay", mRenderPVVOverlay);
             w.checkbox("Use sample camera", mRenderUseSampleCamera);
             w.var("Overlay opacity", mRenderOpacity, 0.01f, 1.0f, 0.01f);
@@ -367,6 +368,10 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             if (w.button("Load Render Volume"))
             {
                 loadRenderVolume();
+            }
+            if (w.button("Start RenderPVV Mode"))
+            {
+                startRenderPVVMode();
             }
             if (w.button("Previous render sample") && !mRenderSamples.empty())
             {
@@ -413,7 +418,12 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createPVVPass();
         createPVVRenderPass();
 
-        if (mPreviewWhileExporting)
+        if (mExportMode == 4)
+        {
+            mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
+            startRenderPVVMode();
+        }
+        else if (mPreviewWhileExporting)
         {
             startProgressiveExport();
         }
@@ -467,6 +477,20 @@ void NeuralPVSExporter::createResources()
         mVolumeSize / 32, mVolumeSize, mVolumeDepth, ResourceFormat::R32Uint, 1, nullptr,
         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
     );
+
+    std::vector<uint8_t> emptyVolume(size_t(mVolumeSize) * size_t(mVolumeSize) * size_t(mVolumeDepth) / 8, 0);
+    mpRenderVolume = getDevice()->createTexture3D(
+        mVolumeSize / 32,
+        mVolumeSize,
+        mVolumeDepth,
+        ResourceFormat::R32Uint,
+        1,
+        emptyVolume.data(),
+        ResourceBindFlags::ShaderResource
+    );
+    mRenderLoadedSampleIndex = 0xffffffffu;
+    mRenderLoadedVolumeSource = 0xffffffffu;
+    mRenderLoadedVolumePath.clear();
 
     Fbo::Desc desc;
     desc.setColorTarget(0, ResourceFormat::RGBA8Unorm);
@@ -552,11 +576,36 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
         applyPreviewSample();
     }
 
+    uint32_t enableRenderPVV = 0u;
+    float3 renderVolumeMin = float3(0.f);
+    if (mRenderPVVCullScene && !mRenderSamples.empty())
+    {
+        if (mRenderUseSampleCamera && !mPreviewSamples.empty())
+        {
+            mRenderSampleIndex = std::min(mPreviewSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+        }
+
+        ensureRenderVolumeLoaded(false);
+        mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+        renderVolumeMin = mRenderSamples[mRenderSampleIndex].center - mRenderVolumeExtent * 0.5f;
+        enableRenderPVV = mpRenderVolume ? 1u : 0u;
+    }
+
     IScene::UpdateFlags updates = mpScene->update(pRenderContext, getGlobalClock().getTime());
     if (is_set(updates, IScene::UpdateFlags::RecompileNeeded))
     {
         FALCOR_THROW("Scene update requires shader recompilation. Reload the scene.");
     }
+
+    auto previewRoot = mpPreviewPass->getRootVar();
+    previewRoot["gRenderPVVVolume"] = mpRenderVolume;
+    previewRoot["PreviewCB"]["gRenderPVVVolumeMin"] = renderVolumeMin;
+    previewRoot["PreviewCB"]["gRenderPVVVolumeSize"] = mRenderVolumeSize;
+    previewRoot["PreviewCB"]["gRenderPVVVolumeExtent"] = mRenderVolumeExtent;
+    previewRoot["PreviewCB"]["gRenderPVVVolumeDepth"] = mRenderVolumeDepth;
+    previewRoot["PreviewCB"]["gEnableRenderPVV"] = enableRenderPVV;
+    previewRoot["PreviewCB"]["gPVVFilter"] = mRenderPVVFilter;
+    previewRoot["PreviewCB"]["gRenderPVVSource"] = mRenderVolumeSource;
 
     mpPreviewPass->getState()->setFbo(pTargetFbo);
     mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
@@ -693,11 +742,19 @@ void NeuralPVSExporter::loadRenderMetadata()
     mRenderVolumeSize = volumeSize;
     mRenderVolumeDepth = volumeDepth;
     mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    mRenderLoadedSampleIndex = 0xffffffffu;
+    mRenderLoadedVolumeSource = 0xffffffffu;
+    mRenderLoadedVolumePath.clear();
     mRenderStatus = "Loaded metadata with " + std::to_string(mRenderSamples.size()) + " samples.";
     mLastExportStatus = mRenderStatus;
 }
 
 void NeuralPVSExporter::loadRenderVolume()
+{
+    ensureRenderVolumeLoaded(true);
+}
+
+void NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 {
     const std::filesystem::path requestedRoot = std::filesystem::path(mRenderDatasetRootText);
     if (mRenderSamples.empty() || requestedRoot != mRenderDatasetRoot)
@@ -706,9 +763,13 @@ void NeuralPVSExporter::loadRenderVolume()
     }
 
     mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
-    const bool loadPVV = mRenderVolumeKind == 1u;
-    const std::filesystem::path volumePath =
-        mRenderDatasetRoot / (loadPVV ? "pvv" : "gv") / fourDigitName(mRenderSampleIndex, loadPVV ? "_pvv.bin.gz" : "_gv.bin.gz");
+    const std::filesystem::path volumePath = resolveRenderVolumePath();
+
+    if (!forceReload && mpRenderVolume && mRenderLoadedSampleIndex == mRenderSampleIndex &&
+        mRenderLoadedVolumeSource == mRenderVolumeSource && mRenderLoadedVolumePath == volumePath)
+    {
+        return;
+    }
 
     std::vector<uint8_t> bytes = readGzipStoredFile(volumePath);
     const size_t expectedBytes = size_t(mRenderVolumeSize) * size_t(mRenderVolumeSize) * size_t(mRenderVolumeDepth) / 8;
@@ -727,6 +788,11 @@ void NeuralPVSExporter::loadRenderVolume()
         ResourceBindFlags::ShaderResource
     );
 
+    mRenderLoadedSampleIndex = mRenderSampleIndex;
+    mRenderLoadedVolumeSource = mRenderVolumeSource;
+    mRenderLoadedVolumePath = volumePath;
+    mRenderVolumeKind = mRenderVolumeSource == 2u ? 0u : 1u;
+
     if (mRenderUseSampleCamera)
     {
         mPreviewSamples = mRenderSamples;
@@ -736,11 +802,66 @@ void NeuralPVSExporter::loadRenderVolume()
     }
 
     mRenderScenePreview = true;
-    mRenderPVVOverlay = true;
     mRenderStatus =
-        "Loaded " + std::string(loadPVV ? "PVV" : "GV") + " sample " + std::to_string(mRenderSampleIndex) + " from " +
-        volumePath.string();
+        "Loaded " + std::string(mRenderVolumeSource == 2u ? "GV" : (mRenderVolumeSource == 1u ? "PVV" : "predicted PVV")) +
+        " sample " + std::to_string(mRenderSampleIndex) + " from " + volumePath.string();
     mLastExportStatus = mRenderStatus;
+}
+
+void NeuralPVSExporter::startRenderPVVMode()
+{
+    loadRenderMetadata();
+
+    mRenderPVVCullScene = true;
+    mRenderPVVOverlay = false;
+    mRenderUseSampleCamera = true;
+    mRenderScenePreview = true;
+    mRenderSampleIndex = 0;
+    mPreviewSamples = mRenderSamples;
+    mPreviewSampleIndex = 0;
+    mPreviewAccumulator = 0.0;
+    mPreviewPlayback = false;
+    applyPreviewSample();
+    ensureRenderVolumeLoaded(true);
+
+    mRenderStatus = "RenderPVV mode ready. Use Play path to walk through predicted PVV samples.";
+    mLastExportStatus = mRenderStatus;
+}
+
+std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
+{
+    if (mRenderSamples.empty())
+    {
+        FALCOR_THROW("Render metadata must be loaded before resolving a volume file.");
+    }
+
+    const uint32_t sampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+
+    if (mRenderVolumeSource == 0u)
+    {
+        const std::filesystem::path predictedRoot = std::filesystem::path(mPredictedPVVRootText);
+        const std::filesystem::path unpaddedPath = predictedRoot / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz");
+        if (std::filesystem::exists(unpaddedPath))
+            return unpaddedPath;
+
+        const std::filesystem::path paddedPath = predictedRoot / fourDigitName(sampleIndex, "_predicted_pvv.bin.gz");
+        if (std::filesystem::exists(paddedPath))
+            return paddedPath;
+
+        FALCOR_THROW(
+            "Could not find predicted PVV sample {}. Tried '{}' and '{}'.",
+            sampleIndex,
+            unpaddedPath.string(),
+            paddedPath.string()
+        );
+    }
+
+    if (mRenderVolumeSource == 1u)
+    {
+        return mRenderDatasetRoot / "pvv" / fourDigitName(sampleIndex, "_pvv.bin.gz");
+    }
+
+    return mRenderDatasetRoot / "gv" / fourDigitName(sampleIndex, "_gv.bin.gz");
 }
 
 std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const
@@ -1268,92 +1389,8 @@ void NeuralPVSExporter::writeDebugProjections(
 
 std::vector<uint8_t> NeuralPVSExporter::readGzipStoredFile(const std::filesystem::path& path) const
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-    {
-        FALCOR_THROW("Failed to open compressed volume '{}'.", path.string());
-    }
-
-    std::vector<uint8_t> fileBytes(
-        (std::istreambuf_iterator<char>(file)),
-        std::istreambuf_iterator<char>()
-    );
-
-    if (fileBytes.size() < 18 || fileBytes[0] != 0x1f || fileBytes[1] != 0x8b || fileBytes[2] != 0x08)
-    {
-        FALCOR_THROW("Compressed volume '{}' is not a supported gzip file.", path.string());
-    }
-
-    size_t offset = 10;
-
-    if ((fileBytes[3] & 0x04u) != 0u)
-    {
-        if (offset + 2 > fileBytes.size())
-            FALCOR_THROW("Compressed volume '{}' has a truncated gzip extra field.", path.string());
-        const uint16_t extraLength = readLE16(fileBytes, offset);
-        offset += 2 + extraLength;
-    }
-
-    auto skipNullTerminatedField = [&](const char* fieldName)
-    {
-        while (offset < fileBytes.size() && fileBytes[offset] != 0)
-            ++offset;
-        if (offset >= fileBytes.size())
-            FALCOR_THROW("Compressed volume '{}' has a truncated gzip {} field.", path.string(), fieldName);
-        ++offset;
-    };
-
-    if ((fileBytes[3] & 0x08u) != 0u) skipNullTerminatedField("name");
-    if ((fileBytes[3] & 0x10u) != 0u) skipNullTerminatedField("comment");
-    if ((fileBytes[3] & 0x02u) != 0u) offset += 2;
-
-    std::vector<uint8_t> output;
-    bool sawFinalBlock = false;
-
-    while (!sawFinalBlock)
-    {
-        if (offset + 5 > fileBytes.size())
-        {
-            FALCOR_THROW("Compressed volume '{}' ended before the next deflate block.", path.string());
-        }
-
-        const uint8_t blockHeader = fileBytes[offset++];
-        sawFinalBlock = (blockHeader & 0x01u) != 0u;
-        const uint8_t blockType = (blockHeader >> 1) & 0x03u;
-        if (blockType != 0u)
-        {
-            FALCOR_THROW("Compressed volume '{}' uses compressed deflate blocks; this viewer expects stored blocks.", path.string());
-        }
-
-        const uint16_t blockLength = readLE16(fileBytes, offset);
-        const uint16_t inverseLength = readLE16(fileBytes, offset + 2);
-        offset += 4;
-
-        if (uint16_t(~blockLength) != inverseLength)
-        {
-            FALCOR_THROW("Compressed volume '{}' has an invalid stored-block length.", path.string());
-        }
-        if (offset + blockLength > fileBytes.size())
-        {
-            FALCOR_THROW("Compressed volume '{}' has a truncated stored block.", path.string());
-        }
-
-        output.insert(output.end(), fileBytes.begin() + offset, fileBytes.begin() + offset + blockLength);
-        offset += blockLength;
-    }
-
-    if (offset + 8 > fileBytes.size())
-    {
-        FALCOR_THROW("Compressed volume '{}' is missing its gzip trailer.", path.string());
-    }
-
-    const uint32_t expectedSize = readLE32(fileBytes, fileBytes.size() - 4);
-    if (uint32_t(output.size()) != expectedSize)
-    {
-        FALCOR_THROW("Compressed volume '{}' unpacked to {} bytes, gzip trailer says {}.", path.string(), output.size(), expectedSize);
-    }
-
-    return output;
+    const std::string decompressed = decompressFile(path);
+    return std::vector<uint8_t>(decompressed.begin(), decompressed.end());
 }
 
 std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(const std::filesystem::path& path) const

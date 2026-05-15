@@ -48,6 +48,9 @@ private:
     void applyPreviewSample();
     void loadRenderMetadata();
     void loadRenderVolume();
+    void ensureRenderVolumeLoaded(bool forceReload);
+    void startRenderPVVMode();
+    std::filesystem::path resolveRenderVolumePath() const;
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
@@ -123,10 +126,14 @@ private:
     std::vector<ExportSample> mPreviewSamples;
 
     std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_robolab_usd_frustum_128";
-    uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV
+    std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_predictions/falcor_robolab_usd_frustum_128";
+    uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV
+    uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
+    uint32_t mRenderPVVFilter = 3; // 1 = exact, 2 = box, 3 = conservative trilinear
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
+    bool mRenderPVVCullScene = false;
     bool mRenderPVVOverlay = false;
     bool mRenderUseSampleCamera = true;
     float mRenderOpacity = 0.55f;
@@ -135,6 +142,9 @@ private:
     std::filesystem::path mRenderDatasetRoot;
     std::vector<ExportSample> mRenderSamples;
     std::string mRenderStatus = "No render volume loaded.";
+    uint32_t mRenderLoadedSampleIndex = 0xffffffffu;
+    uint32_t mRenderLoadedVolumeSource = 0xffffffffu;
+    std::filesystem::path mRenderLoadedVolumePath;
 
     bool mProgressiveExportActive = false;
     uint32_t mProgressiveExportIndex = 0;
