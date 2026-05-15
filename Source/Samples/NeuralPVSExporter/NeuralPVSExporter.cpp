@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -337,7 +338,12 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.var("View cell far", mViewCellFarPlane, 0.1f, 1000.0f, 0.1f);
             if (mExportMode == 3)
             {
-                w.textbox("Predicted PVV override", mPredictedPVVRootText);
+                if (w.button("Use generated dataset paths"))
+                {
+                    useGeneratedRenderPaths();
+                }
+                w.textbox("Dataset path", mRenderDatasetRootText);
+                w.textbox("PVV path", mPredictedPVVRootText);
                 w.checkbox("Export frames", mRenderExportFrames);
                 Gui::DropdownList frameExportModes = {
                     {0, "Image sequence"},
@@ -950,6 +956,13 @@ bool NeuralPVSExporter::isModeRunning() const
     return mRenderPVVActive || mPreviewPlayback;
 }
 
+void NeuralPVSExporter::useGeneratedRenderPaths()
+{
+    const std::filesystem::path datasetRoot = std::filesystem::path(mOutputRootText) / mDatasetName;
+    mRenderDatasetRootText = datasetRoot.string();
+    mPredictedPVVRootText = (datasetRoot / "predicted_pvv").string();
+}
+
 void NeuralPVSExporter::startSelectedMode()
 {
     try
@@ -959,7 +972,14 @@ void NeuralPVSExporter::startSelectedMode()
         mVolumeMappingMode = 1;
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
-        mRenderDatasetRootText = (mOutputRoot / mDatasetName).string();
+        if (mExportMode != 3)
+        {
+            useGeneratedRenderPaths();
+        }
+        else if (mRenderDatasetRootText.empty())
+        {
+            useGeneratedRenderPaths();
+        }
         mRenderVolumeSource = 0;
         mRenderUseSampleCamera = true;
         mRenderKeepOutsidePVVInView = true;
@@ -999,47 +1019,47 @@ void NeuralPVSExporter::startSelectedMode()
 
 void NeuralPVSExporter::stopCurrentMode()
 {
-    if (mProgressiveExportActive)
+    const bool wasProgressiveExport = mProgressiveExportActive;
+    const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
+    const bool wasPathPlayback = mPreviewPlayback;
+    const uint32_t stoppedExportIndex = mProgressiveExportIndex;
+    const uint32_t stoppedRenderIndex = mRenderSampleIndex;
+
+    mProgressiveExportActive = false;
+    mPreviewPlayback = false;
+    mPreviewAccumulator = 0.0;
+    mRenderPVVActive = false;
+    mRenderPVVFinished = true;
+    mRenderPVVCullScene = false;
+
+    if (wasRenderPVV && mRenderFrameExportMode == 1u)
     {
-        mProgressiveExportActive = false;
-        mPreviewPlayback = false;
-        mPreviewAccumulator = 0.0;
-        mRenderPVVActive = false;
-        mLastExportStatus = "Stopped export at sample " + std::to_string(mProgressiveExportIndex) + ".";
+        removeDirectoryQuietly(getRenderFrameStagingPath());
+    }
+
+    if (wasProgressiveExport)
+    {
+        mLastExportStatus = "Stopped export at sample " + std::to_string(stoppedExportIndex) + ".";
         return;
     }
 
-    if (mRenderPVVActive || mRenderPVVCullScene)
+    if (wasRenderPVV)
     {
-        mPreviewPlayback = false;
-        mPreviewAccumulator = 0.0;
-        mRenderPVVActive = false;
-        mRenderPVVFinished = true;
-        mRenderPVVCullScene = false;
-
-        if (mRenderFrameExportMode == 1u)
-        {
-            removeDirectoryQuietly(getRenderFrameStagingPath());
-        }
-
         mRenderStatus =
-            "RenderPVV stopped at sample " + std::to_string(mRenderSampleIndex) +
+            "RenderPVV stopped at sample " + std::to_string(stoppedRenderIndex) +
             (mRenderExportFrames && mRenderFrameExportMode == 0u ? ". Frames saved to " + getRenderFrameOutputPath().string() : ".");
         mLastExportStatus = mRenderStatus;
         return;
     }
 
-    if (mPreviewPlayback)
-    {
-        mPreviewPlayback = false;
-        mPreviewAccumulator = 0.0;
-        mLastExportStatus = "Stopped path playback.";
-    }
+    mLastExportStatus = wasPathPlayback ? "Stopped path playback." : "Nothing is running.";
 }
 
 void NeuralPVSExporter::startRenderPVVMode()
 {
-    mRenderDatasetRootText = (std::filesystem::path(mOutputRootText) / mDatasetName).string();
+    if (mRenderDatasetRootText.empty())
+        useGeneratedRenderPaths();
+
     mRenderVolumeSource = 0u;
     loadRenderMetadata();
 
@@ -1345,6 +1365,7 @@ void NeuralPVSExporter::startProgressiveExport()
     mProgressiveGVBitCounts.reserve(mProgressiveExportSamples.size());
     mProgressivePVVBitCounts.reserve(mProgressiveExportSamples.size());
     mProgressiveExportIndex = 0;
+    mProgressiveExportElapsedMs = 0.0;
     mProgressiveExportActive = true;
 
     mPreviewSamples = mProgressiveExportSamples;
@@ -1372,6 +1393,7 @@ void NeuralPVSExporter::processProgressiveExportSample(RenderContext* pRenderCon
 
     uint64_t gvBitCount = 0;
     uint64_t pvvBitCount = 0;
+    const auto sampleStart = std::chrono::steady_clock::now();
     exportOneSample(
         pRenderContext,
         mProgressiveExportSamples[mProgressiveExportIndex],
@@ -1381,13 +1403,20 @@ void NeuralPVSExporter::processProgressiveExportSample(RenderContext* pRenderCon
         gvBitCount,
         pvvBitCount
     );
+    const auto sampleEnd = std::chrono::steady_clock::now();
+    const double sampleMs = std::chrono::duration<double, std::milli>(sampleEnd - sampleStart).count();
+    mProgressiveExportElapsedMs += sampleMs;
 
     mProgressiveGVBitCounts.push_back(gvBitCount);
     mProgressivePVVBitCounts.push_back(pvvBitCount);
 
+    const uint32_t completedSamples = mProgressiveExportIndex + 1u;
+    const double avgMs = mProgressiveExportElapsedMs / double(completedSamples);
     mLastExportStatus =
         "Exported sample " + std::to_string(mProgressiveExportIndex) + " / " +
-        std::to_string(mProgressiveExportSamples.size() - 1) + " with live preview.";
+        std::to_string(mProgressiveExportSamples.size() - 1) + " in " +
+        std::to_string(uint32_t(std::round(sampleMs))) + " ms (avg " +
+        std::to_string(uint32_t(std::round(avgMs))) + " ms/sample).";
 
     ++mProgressiveExportIndex;
     if (mProgressiveExportIndex >= mProgressiveExportSamples.size())
@@ -1411,7 +1440,12 @@ void NeuralPVSExporter::finishProgressiveExport()
     );
 
     mProgressiveExportActive = false;
-    mLastExportStatus = "Exported " + std::to_string(mProgressiveExportSamples.size()) + " " + mDatasetName + " samples with live preview.";
+    const double avgMs =
+        mProgressiveExportSamples.empty() ? 0.0 : mProgressiveExportElapsedMs / double(mProgressiveExportSamples.size());
+    mLastExportStatus =
+        "Exported " + std::to_string(mProgressiveExportSamples.size()) + " " + mDatasetName +
+        " samples in " + std::to_string(uint32_t(std::round(mProgressiveExportElapsedMs))) +
+        " ms (avg " + std::to_string(uint32_t(std::round(avgMs))) + " ms/sample).";
 }
 
 void NeuralPVSExporter::exportOneSample(

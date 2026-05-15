@@ -65,6 +65,7 @@ private:
     void startSelectedMode();
     void stopCurrentMode();
     void startRenderPVVMode();
+    void useGeneratedRenderPaths();
     std::filesystem::path resolveRenderVolumePath() const;
     std::filesystem::path getRenderPredictedPVVRoot() const;
     std::filesystem::path getRenderFrameOutputPath() const;
@@ -185,6 +186,7 @@ private:
 
     bool mProgressiveExportActive = false;
     uint32_t mProgressiveExportIndex = 0;
+    double mProgressiveExportElapsedMs = 0.0;
     bool mProgressiveUseCameraFrustum = false;
     AABB mProgressiveSceneBounds;
     float3 mProgressiveSceneCenter = float3(0.f);
