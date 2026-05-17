@@ -46,12 +46,14 @@ private:
         float farPlane = 30.f;
         float tanHalfFovX = 1.f;
         float tanHalfFovY = 1.f;
+        float fovYRadians = 1.04719755f;
     };
 
     void loadScene(const std::filesystem::path& path);
     void createResources();
     void createPreviewPass();
     void createGVPass();
+    void createPVVDepthPass();
     void createPVVPass();
     void renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void createPVVRenderPass();
@@ -80,7 +82,13 @@ private:
     void exportSceneVolumes(RenderContext* pRenderContext);
     std::vector<ExportSample> buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const;
     void validateExportSamples(const std::vector<ExportSample>& samples, bool useCameraFrustum) const;
-    VolumeProjectionParams makeVolumeProjection(const ExportSample& sample, float viewCellRadius, float nearPlane, float farPlane) const;
+    VolumeProjectionParams makeVolumeProjection(
+        const ExportSample& sample,
+        float viewCellRadius,
+        float nearPlane,
+        float farPlane,
+        float fovExpansionDegrees
+    ) const;
     void exportOneSample(
         RenderContext* pRenderContext,
         const ExportSample& sample,
@@ -121,6 +129,7 @@ private:
     uint32_t mVolumeDepth = 256;
     uint32_t mRasterWidth = 2048;
     uint32_t mRasterHeight = 2048;
+    uint32_t mSamplingFactor = 2;
     uint32_t mExportIndex = 0;
 
     std::string mScenePathText = "media/RobolabUSD/Robolab.usda";
@@ -138,12 +147,18 @@ private:
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
-    uint32_t mVisibilityMode = 1; // 0 = view cell, 1 = camera frustum
+    uint32_t mVisibilityMode = 1; // 0 = view cell rays, 1 = Unity viewcell sample cameras
     float mCameraAspectRatio = 1.777778f;
     uint32_t mVolumeMappingMode = 1; // 0 = world AABB, 1 = Unity view-cell projection
     float mViewCellRadius = 0.3f;
     float mViewCellNearPlane = 0.3f;
     float mViewCellFarPlane = 30.0f;
+    uint32_t mPVVSampleSteps = 10;
+    bool mLinearZ = true;
+    float mLogDepthScale = 0.01f;
+    float mUnityFovExpansionDegrees = 30.0f;
+    bool mHighDetail = false;
+    float mMaxOrthoSize = 80.0f;
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;
@@ -156,7 +171,7 @@ private:
     std::string mPredictedPVVRootText;
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
-    uint32_t mRenderPVVFilter = 2; // 1 = none/exact, 2 = box, 3 = conservative trilinear
+    uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = box, 3 = conservative trilinear
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
@@ -164,6 +179,13 @@ private:
     float mRenderViewCellRadius = 0.3f;
     float mRenderViewCellNearPlane = 0.3f;
     float mRenderViewCellFarPlane = 30.0f;
+    uint32_t mRenderPVVSampleSteps = 10;
+    bool mRenderLinearZ = true;
+    float mRenderLogDepthScale = 0.01f;
+    float mRenderUnityFovExpansionDegrees = 30.0f;
+    uint32_t mRenderSamplingFactor = 2;
+    bool mRenderHighDetail = false;
+    float mRenderMaxOrthoSize = 80.0f;
     bool mRenderExportFrames = false;
     uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
     bool mRenderPVVActive = false;
@@ -204,12 +226,14 @@ private:
     ref<Camera> mpCamera;
     ref<RasterPass> mpPreviewPass;
     ref<RasterPass> mpGVPass;
+    ref<RasterPass> mpPVVDepthPass;
     ref<ComputePass> mpPVVPass;
     ref<FullScreenPass> mpPVVRenderPass;
     ref<Texture> mpGVVolume;
     ref<Texture> mpPVVVolume;
     ref<Texture> mpRenderVolume;
     ref<Fbo> mpGVFbo;
+    ref<Fbo> mpPVVDepthFbo;
 
     std::string mLastExportStatus = "Not exported yet.";
 };

@@ -27,6 +27,9 @@ cbuffer PreviewCB
     uint gPadding1;
     float3 gViewCellUp;
     uint gPadding2;
+    uint gLinearZ;
+    float gLogDepthScale;
+    uint2 gPadding3;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -84,7 +87,14 @@ bool worldToVolume01(float3 worldPos, out float3 p)
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
-    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane));
+    float z = (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane);
+    if (gLinearZ == 0u)
+    {
+        z = log2(gLogDepthScale * (depth / gViewCellNearPlane) + 1.0f) /
+            log2(gLogDepthScale * (gViewCellFarPlane / gViewCellNearPlane) + 1.0f);
+    }
+
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
 
     return all(p >= 0.0f) && all(p <= 1.0f);
 }

@@ -1,126 +1,90 @@
-﻿import Scene.RaytracingInline;
-
-Texture3D<uint> gGeometryVolume;
+Texture2D<float> gVisibilityDepthBuffer;
 RWTexture3D<uint> gPVVVolume;
 
 cbuffer PVVCB
 {
+    float4x4 gSampleInvViewProj;
     float3 gSceneMin;
     uint gVolumeSize;
     float3 gSceneExtent;
     uint gVolumeDepth;
-    float3 gViewCellCenter;
-    float gViewCellRadius;
-    uint gSampleCount;
-    uint gUseCameraFrustum;
-    float gCameraFovYRadians;
-    float gCameraAspectRatio;
-    float3 gCameraForward;
-    uint gPadding0;
+    uint2 gDepthBufferSize;
     uint gUseProjectionVolume;
-    float gViewCellNearPlane;
-    float gViewCellFarPlane;
-    float gTanHalfFovX;
+    uint gLinearZ;
     float3 gViewCellPosition;
-    float gTanHalfFovY;
+    float gViewCellNearPlane;
     float3 gViewCellForward;
-    uint gPadding1;
+    float gViewCellFarPlane;
     float3 gViewCellRight;
-    uint gPadding2;
+    float gTanHalfFovX;
     float3 gViewCellUp;
-    uint gPadding3;
+    float gTanHalfFovY;
+    float gLogDepthScale;
+    uint3 gPadding0;
 };
 
-float3 getSampleOffset(uint sampleIndex)
+bool worldToVolume01(float3 worldPos, out float3 p)
 {
-    float r = gViewCellRadius;
-    switch (sampleIndex)
-    {
-    case 0: return float3(0, 0, 0);
-    case 1: return float3( r, 0, 0);
-    case 2: return float3(-r, 0, 0);
-    case 3: return float3(0,  r, 0);
-    case 4: return float3(0, -r, 0);
-    case 5: return float3(0, 0,  r);
-    case 6: return float3(0, 0, -r);
-    case 7: return float3( r,  r, 0);
-    default: return float3(-r, -r, 0);
-    }
-}
-
-bool isInsideCameraFrustum(float3 origin, float3 voxelWorld)
-{
-    if (gUseCameraFrustum == 0u) return true;
-
-    float3 toVoxel = voxelWorld - origin;
-    float distance = length(toVoxel);
-    if (distance <= 0.001f) return false;
-
-    float3 forward = normalize(gCameraForward);
-    float3 dir = toVoxel / distance;
-    float depth = dot(dir, forward);
-    if (depth <= 0.0f) return false;
-
-    float3 upHint = abs(forward.y) > 0.98f ? float3(0, 0, 1) : float3(0, 1, 0);
-    float3 right = normalize(cross(upHint, forward));
-    float3 up = cross(forward, right);
-
-    float tanHalfY = tan(0.5f * gCameraFovYRadians);
-    float tanHalfX = tanHalfY * gCameraAspectRatio;
-    float horizontal = abs(dot(dir, right) / depth);
-    float vertical = abs(dot(dir, up) / depth);
-
-    return horizontal <= tanHalfX && vertical <= tanHalfY;
-}
-
-float3 voxelToWorld(uint x, uint y, uint z)
-{
-    float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f) / float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth));
     if (gUseProjectionVolume == 0u)
-        return gSceneMin + voxel01 * gSceneExtent;
+    {
+        p = (worldPos - gSceneMin) / gSceneExtent;
+        return all(p >= 0.0f) && all(p <= 1.0f);
+    }
 
-    float depth = lerp(gViewCellNearPlane, gViewCellFarPlane, voxel01.z);
-    float xNdc = voxel01.x * 2.0f - 1.0f;
-    float yNdc = voxel01.y * 2.0f - 1.0f;
+    float3 rel = worldPos - gViewCellPosition;
+    float depth = dot(rel, normalize(gViewCellForward));
+    if (depth < gViewCellNearPlane || depth > gViewCellFarPlane)
+        return false;
 
-    return gViewCellPosition +
-        normalize(gViewCellForward) * depth +
-        normalize(gViewCellRight) * (xNdc * depth * gTanHalfFovX) +
-        normalize(gViewCellUp) * (yNdc * depth * gTanHalfFovY);
+    float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
+    float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
+    float z = (depth - gViewCellNearPlane) / max(1e-6f, gViewCellFarPlane - gViewCellNearPlane);
+    if (gLinearZ == 0u)
+    {
+        z = log2(gLogDepthScale * (depth / gViewCellNearPlane) + 1.0f) /
+            log2(gLogDepthScale * (gViewCellFarPlane / gViewCellNearPlane) + 1.0f);
+    }
+
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
+    return all(p >= 0.0f) && all(p <= 1.0f);
 }
 
-[numthreads(4, 4, 4)]
+[numthreads(16, 16, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
-    uint wordsX = gVolumeSize / 32;
-    if (id.x >= wordsX || id.y >= gVolumeSize || id.z >= gVolumeDepth) return;
+    if (id.x >= gDepthBufferSize.x || id.y >= gDepthBufferSize.y)
+        return;
 
-    uint word = gGeometryVolume[int3(id)];
-    if (word == 0u) return;
+    float depth = gVisibilityDepthBuffer.Load(int3(int(id.x), int(id.y), 0));
+    if (depth >= 1.0f || depth <= 0.0f)
+        return;
 
-    SceneRayQuery<1> rayQuery;
+    float ndcX = (float(id.x) + 0.5f) * 2.0f / float(gDepthBufferSize.x) - 1.0f;
+    float ndcY = (float(id.y) + 0.5f) * 2.0f / float(gDepthBufferSize.y) - 1.0f;
+    float4 worldPosH = mul(gSampleInvViewProj, float4(ndcX, ndcY, depth, 1.0f));
+    float3 worldPos = worldPosH.xyz / worldPosH.w;
 
-    for (uint bit = 0; bit < 32; ++bit)
+    float3 p = float3(0.0f);
+    if (!worldToVolume01(worldPos, p))
+        return;
+
+    float volXf = p.x * float(gVolumeSize);
+    float volYf = p.y * float(gVolumeSize);
+    float volZf = p.z * float(gVolumeDepth);
+
+    if (volXf < 0.0f || volXf >= float(gVolumeSize) ||
+        volYf < 0.0f || volYf >= float(gVolumeSize) ||
+        volZf < 0.0f || volZf >= float(gVolumeDepth))
     {
-        uint bitMask = 1u << (31u - bit);
-        if ((word & bitMask) == 0u) continue;
-
-        uint x = id.x * 32u + bit;
-        float3 voxelWorld = voxelToWorld(x, id.y, id.z);
-
-        bool visible = false;
-        for (uint sampleIndex = 0; sampleIndex < gSampleCount && !visible; ++sampleIndex)
-        {
-            float3 origin = gViewCellCenter + getSampleOffset(sampleIndex);
-            float3 toVoxel = voxelWorld - origin;
-            float distance = length(toVoxel);
-            if (distance <= 0.001f) continue;
-            if (!isInsideCameraFrustum(origin, voxelWorld)) continue;
-
-            Ray ray = Ray(origin, toVoxel / distance, 0.01f, distance * 0.98f);
-            visible = rayQuery.traceVisibilityRay(ray);
-        }
-
-        if (visible) InterlockedOr(gPVVVolume[int3(id)], bitMask);
+        return;
     }
+
+    uint x = uint(trunc(volXf));
+    uint y = uint(trunc(volYf));
+    uint z = uint(trunc(volZf));
+    uint wordX = x / 32u;
+    uint bitInWord = x % 32u;
+    uint bitMask = 1u << (31u - bitInWord);
+
+    InterlockedOr(gPVVVolume[int3(wordX, y, z)], bitMask);
 }

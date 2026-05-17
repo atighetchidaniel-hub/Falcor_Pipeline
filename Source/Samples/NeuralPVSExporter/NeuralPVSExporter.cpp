@@ -262,6 +262,7 @@ void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
     createResources();
     createPreviewPass();
     createGVPass();
+    createPVVDepthPass();
     createPVVPass();
     createPVVRenderPass();
 }
@@ -341,6 +342,13 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
             w.var("View cell near", mViewCellNearPlane, 0.001f, 10.0f, 0.001f);
             w.var("View cell far", mViewCellFarPlane, 0.1f, 1000.0f, 0.1f);
+            w.var("Sampling factor", mSamplingFactor, 1u, 8u);
+            w.var("PVV sample steps", mPVVSampleSteps, 1u, 20u);
+            w.checkbox("Linear Z", mLinearZ);
+            w.var("Log depth scale", mLogDepthScale, 0.0001f, 1.0f, 0.0001f);
+            w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
+            w.checkbox("High-detail GV cameras", mHighDetail);
+            w.var("Max ortho size", mMaxOrthoSize, 1.0f, 500.0f, 1.0f);
             if (mExportMode == 3)
             {
                 if (w.button("Use generated dataset paths"))
@@ -384,9 +392,9 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             }
 
             Gui::DropdownList pvvFilters = {
-                {1, "None"},
-                {2, "Box (recommended)"},
-                {3, "Trilinear"},
+                {1, "None (exact)"},
+                {2, "Box (debug/dilated)"},
+                {3, "Trilinear (debug)"},
             };
             w.dropdown("RenderPVV filter", pvvFilters, mRenderPVVFilter);
             w.checkbox("Write debug projections", mWriteDebugProjections);
@@ -444,6 +452,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createResources();
         createPreviewPass();
         createGVPass();
+        createPVVDepthPass();
         createPVVPass();
         createPVVRenderPass();
 
@@ -538,7 +547,13 @@ void NeuralPVSExporter::createResources()
     Fbo::Desc desc;
     desc.setColorTarget(0, ResourceFormat::RGBA8Unorm);
     desc.setDepthStencilTarget(ResourceFormat::D32Float);
-    mpGVFbo = Fbo::create2D(getDevice(), mRasterWidth, mRasterHeight, desc);
+    const uint32_t rasterWidth = mRasterWidth * std::max(1u, mSamplingFactor);
+    const uint32_t rasterHeight = mRasterHeight * std::max(1u, mSamplingFactor);
+    mpGVFbo = Fbo::create2D(getDevice(), rasterWidth, rasterHeight, desc);
+
+    Fbo::Desc depthDesc;
+    depthDesc.setDepthStencilTarget(ResourceFormat::D32Float);
+    mpPVVDepthFbo = Fbo::create2D(getDevice(), rasterWidth, rasterHeight, depthDesc);
 }
 
 void NeuralPVSExporter::createPreviewPass()
@@ -559,15 +574,27 @@ void NeuralPVSExporter::createGVPass()
     desc.addTypeConformances(mpScene->getTypeConformances());
 
     mpGVPass = RasterPass::create(getDevice(), desc, mpScene->getSceneDefines());
+    DepthStencilState::Desc depthDesc;
+    depthDesc.setDepthEnabled(false);
+    mpGVPass->getState()->setDepthStencilState(DepthStencilState::create(depthDesc));
+}
+
+void NeuralPVSExporter::createPVVDepthPass()
+{
+    ProgramDesc desc;
+    desc.addShaderModules(mpScene->getShaderModules());
+    desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSDepthOnly.3d.slang").vsEntry("vsMain").psEntry("psMain");
+    desc.addTypeConformances(mpScene->getTypeConformances());
+
+    mpPVVDepthPass = RasterPass::create(getDevice(), desc, mpScene->getSceneDefines());
+
+    DepthStencilState::Desc depthDesc;
+    depthDesc.setDepthEnabled(true).setDepthFunc(ComparisonFunc::LessEqual).setDepthWriteMask(true);
+    mpPVVDepthPass->getState()->setDepthStencilState(DepthStencilState::create(depthDesc));
 }
 
 void NeuralPVSExporter::createPVVPass()
 {
-    if (!getDevice()->isFeatureSupported(Device::SupportedFeatures::RaytracingTier1_1))
-    {
-        FALCOR_THROW("NeuralPVS PVV export requires DXR 1.1 / inline ray tracing support.");
-    }
-
     ProgramDesc desc;
     desc.addShaderModules(mpScene->getShaderModules());
     desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSPVV.cs.slang").csEntry("main");
@@ -663,7 +690,8 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
             renderSample,
             mRenderViewCellRadius,
             mRenderViewCellNearPlane,
-            mRenderViewCellFarPlane
+            mRenderViewCellFarPlane,
+            mRenderUnityFovExpansionDegrees
         );
         renderVolumeMappingMode = mRenderVolumeMappingMode == 1u && renderSample.hasCamera ? 1u : 0u;
         enableRenderPVV = mpRenderVolume ? 1u : 0u;
@@ -695,6 +723,8 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     previewRoot["PreviewCB"]["gViewCellFarPlane"] = renderProjection.farPlane;
     previewRoot["PreviewCB"]["gTanHalfFovX"] = renderProjection.tanHalfFovX;
     previewRoot["PreviewCB"]["gTanHalfFovY"] = renderProjection.tanHalfFovY;
+    previewRoot["PreviewCB"]["gLinearZ"] = mRenderPVVActive ? (mRenderLinearZ ? 1u : 0u) : (mLinearZ ? 1u : 0u);
+    previewRoot["PreviewCB"]["gLogDepthScale"] = mRenderPVVActive ? mRenderLogDepthScale : mLogDepthScale;
 
     mpPreviewPass->getState()->setFbo(pTargetFbo);
     mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
@@ -781,6 +811,13 @@ void NeuralPVSExporter::loadRenderMetadata()
     float viewCellRadius = mViewCellRadius;
     float viewCellNearPlane = mViewCellNearPlane;
     float viewCellFarPlane = mViewCellFarPlane;
+    float pvvSampleSteps = float(mPVVSampleSteps);
+    float samplingFactor = float(mSamplingFactor);
+    bool linearZ = mLinearZ;
+    bool highDetail = mHighDetail;
+    float logDepthScale = mLogDepthScale;
+    float unityFovExpansionDegrees = mUnityFovExpansionDegrees;
+    float maxOrthoSize = mMaxOrthoSize;
 
     std::string line;
     while (std::getline(metadata, line))
@@ -794,6 +831,37 @@ void NeuralPVSExporter::loadRenderMetadata()
         extractFloatFromLine(line, "\"view_cell_radius\"", viewCellRadius);
         extractFloatFromLine(line, "\"view_cell_near\"", viewCellNearPlane);
         extractFloatFromLine(line, "\"view_cell_far\"", viewCellFarPlane);
+        extractFloatFromLine(line, "\"pvv_sample_steps\"", pvvSampleSteps);
+        extractFloatFromLine(line, "\"sampling_factor\"", samplingFactor);
+        extractFloatFromLine(line, "\"log_depth_scale\"", logDepthScale);
+        extractFloatFromLine(line, "\"unity_fov_expansion_degrees\"", unityFovExpansionDegrees);
+        extractFloatFromLine(line, "\"max_ortho_size\"", maxOrthoSize);
+
+        if (line.find("\"linear_z\"") != std::string::npos)
+        {
+            const size_t colon = line.find(':');
+            if (colon != std::string::npos)
+            {
+                size_t end = line.find_first_of(",}", colon + 1);
+                if (end == std::string::npos)
+                    end = line.size();
+                const std::string value = toLower(trim(line.substr(colon + 1, end - colon - 1)));
+                linearZ = value == "true" || value == "1";
+            }
+        }
+
+        if (line.find("\"high_detail\"") != std::string::npos)
+        {
+            const size_t colon = line.find(':');
+            if (colon != std::string::npos)
+            {
+                size_t end = line.find_first_of(",}", colon + 1);
+                if (end == std::string::npos)
+                    end = line.size();
+                const std::string value = toLower(trim(line.substr(colon + 1, end - colon - 1)));
+                highDetail = value == "true" || value == "1";
+            }
+        }
 
         std::vector<float> volumeSizeValues = extractFloatArrayFromLine(line, "\"volume_size\"");
         if (volumeSizeValues.size() >= 3)
@@ -851,6 +919,13 @@ void NeuralPVSExporter::loadRenderMetadata()
     mRenderViewCellRadius = std::max(0.001f, viewCellRadius);
     mRenderViewCellNearPlane = std::max(0.001f, viewCellNearPlane);
     mRenderViewCellFarPlane = std::max(mRenderViewCellNearPlane + 0.001f, viewCellFarPlane);
+    mRenderPVVSampleSteps = std::max(1u, uint32_t(std::round(pvvSampleSteps)));
+    mRenderSamplingFactor = std::max(1u, uint32_t(std::round(samplingFactor)));
+    mRenderLinearZ = linearZ;
+    mRenderHighDetail = highDetail;
+    mRenderLogDepthScale = std::max(0.0001f, logDepthScale);
+    mRenderUnityFovExpansionDegrees = std::clamp(unityFovExpansionDegrees, 0.0f, 90.0f);
+    mRenderMaxOrthoSize = std::max(0.001f, maxOrthoSize);
     mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
     mRenderLoadedSampleIndex = 0xffffffffu;
     mRenderLoadedVolumeSource = 0xffffffffu;
@@ -1028,6 +1103,7 @@ void NeuralPVSExporter::startSelectedMode()
         createResources();
         createPreviewPass();
         createGVPass();
+        createPVVDepthPass();
         createPVVPass();
         createPVVRenderPass();
 
@@ -1372,12 +1448,15 @@ NeuralPVSExporter::VolumeProjectionParams NeuralPVSExporter::makeVolumeProjectio
     const ExportSample& sample,
     float viewCellRadius,
     float nearPlane,
-    float farPlane
+    float farPlane,
+    float fovExpansionDegrees
 ) const
 {
     VolumeProjectionParams params;
 
-    const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
+    const float expandedFovYDegrees =
+        std::clamp(sample.fovYDegrees + fovExpansionDegrees, 1.0f, 179.0f);
+    const float fovYRadians = expandedFovYDegrees * 3.1415926535f / 180.0f;
     const float aspectRatio = std::max(0.1f, mCameraAspectRatio);
     const float tanHalfOffsetFov = std::max(0.0001f, std::tan(0.5f * fovYRadians / aspectRatio));
     const float viewCellOffset = std::max(0.0f, viewCellRadius) / tanHalfOffsetFov;
@@ -1392,6 +1471,7 @@ NeuralPVSExporter::VolumeProjectionParams NeuralPVSExporter::makeVolumeProjectio
     params.farPlane = std::max(params.nearPlane + 0.001f, farPlane + 2.0f * viewCellOffset);
     params.tanHalfFovY = std::max(0.0001f, std::tan(0.5f * fovYRadians));
     params.tanHalfFovX = params.tanHalfFovY * aspectRatio;
+    params.fovYRadians = fovYRadians;
 
     return params;
 }
@@ -1512,7 +1592,7 @@ void NeuralPVSExporter::exportOneSample(
     const bool useCameraFrustum = mVisibilityMode == 1;
     const bool useProjectionVolume = mVolumeMappingMode == 1 && sample.hasCamera;
     const VolumeProjectionParams volumeProjection =
-        makeVolumeProjection(sample, viewCellRadius, mViewCellNearPlane, mViewCellFarPlane);
+        makeVolumeProjection(sample, viewCellRadius, mViewCellNearPlane, mViewCellFarPlane, mUnityFovExpansionDegrees);
 
     pRenderContext->clearUAV(mpGVVolume->getUAV().get(), uint4(0, 0, 0, 0));
     pRenderContext->clearUAV(mpPVVVolume->getUAV().get(), uint4(0, 0, 0, 0));
@@ -1533,26 +1613,148 @@ void NeuralPVSExporter::exportOneSample(
     gvRoot["ExporterCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
     gvRoot["ExporterCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
     gvRoot["ExporterCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
+    gvRoot["ExporterCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
+    gvRoot["ExporterCB"]["gLogDepthScale"] = mLogDepthScale;
 
-    mpGVPass->getState()->setFbo(mpGVFbo);
-    mpScene->rasterize(pRenderContext, mpGVPass->getState().get(), mpGVPass->getVars().get());
+    if (!mpCamera)
+    {
+        FALCOR_THROW("NeuralPVS export requires a scene camera.");
+    }
+
+    const float3 oldCameraPosition = mpCamera->getPosition();
+    const float3 oldCameraTarget = mpCamera->getTarget();
+    const float3 oldCameraUp = mpCamera->getUpVector();
+    const float oldFocalLength = mpCamera->getFocalLength();
+    const float oldAspectRatio = mpCamera->getAspectRatio();
+    const float oldNearPlane = mpCamera->getNearPlane();
+    const float oldFarPlane = mpCamera->getFarPlane();
+
+    auto updateSceneForCamera = [&]()
+    {
+        IScene::UpdateFlags cameraUpdates = mpScene->update(pRenderContext, getGlobalClock().getTime());
+        if (is_set(cameraUpdates, IScene::UpdateFlags::RecompileNeeded))
+        {
+            FALCOR_THROW("Scene update requires shader recompilation. Reload the scene.");
+        }
+    };
+
+    auto setPerspectiveCamera = [&](float3 position, float3 forward, float3 up, float fovYRadians, float nearPlane, float farPlane)
+    {
+        mpCamera->togglePersistentProjectionMatrix(false);
+        mpCamera->setPosition(position);
+        mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
+        mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
+        mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
+        mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
+        mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
+        updateSceneForCamera();
+    };
+
+    auto setOrthographicCamera = [&](float3 position, float3 forward, float3 up, float width, float height, float nearPlane, float farPlane)
+    {
+        width = std::max(0.001f, width);
+        height = std::max(0.001f, height);
+        mpCamera->togglePersistentProjectionMatrix(false);
+        mpCamera->setPosition(position);
+        mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
+        mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
+        mpCamera->setAspectRatio(width / height);
+        mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
+        mpCamera->setProjectionMatrix(math::ortho(-0.5f * width, 0.5f * width, -0.5f * height, 0.5f * height, nearPlane, farPlane));
+        updateSceneForCamera();
+    };
+
+    auto restoreCamera = [&]()
+    {
+        mpCamera->togglePersistentProjectionMatrix(false);
+        mpCamera->setPosition(oldCameraPosition);
+        mpCamera->setTarget(oldCameraTarget);
+        mpCamera->setUpVector(oldCameraUp);
+        mpCamera->setFocalLength(oldFocalLength);
+        mpCamera->setAspectRatio(oldAspectRatio);
+        mpCamera->setDepthRange(oldNearPlane, oldFarPlane);
+        updateSceneForCamera();
+    };
+
+    auto renderGVFromCurrentCamera = [&]()
+    {
+        mpGVPass->getState()->setFbo(mpGVFbo);
+        mpScene->rasterize(
+            pRenderContext,
+            mpGVPass->getState().get(),
+            mpGVPass->getVars().get(),
+            RasterizerState::CullMode::None
+        );
+    };
+
+    if (useProjectionVolume)
+    {
+        setPerspectiveCamera(
+            volumeProjection.viewCellPosition,
+            volumeProjection.forward,
+            volumeProjection.up,
+            volumeProjection.fovYRadians,
+            volumeProjection.nearPlane,
+            volumeProjection.farPlane
+        );
+        renderGVFromCurrentCamera();
+
+        if (mHighDetail)
+        {
+            const float halfFarSize = volumeProjection.farPlane * std::tan(0.5f * volumeProjection.fovYRadians);
+            const float farMax =
+                std::max(volumeProjection.nearPlane + 0.001f, std::min(volumeProjection.farPlane, std::max(0.001f, mMaxOrthoSize)));
+            const float halfFarSizeMax = farMax * std::tan(0.5f * volumeProjection.fovYRadians);
+            const float farSizeMax = 2.0f * halfFarSizeMax;
+            const float distanceToCenter = volumeProjection.nearPlane + (farMax - volumeProjection.nearPlane) * 0.5f;
+            const float3 frustumCenter = volumeProjection.viewCellPosition + volumeProjection.forward * distanceToCenter;
+
+            setOrthographicCamera(
+                volumeProjection.viewCellPosition,
+                volumeProjection.forward,
+                volumeProjection.up,
+                farSizeMax,
+                farSizeMax,
+                volumeProjection.nearPlane,
+                farMax
+            );
+            renderGVFromCurrentCamera();
+
+            setOrthographicCamera(
+                frustumCenter + volumeProjection.right * halfFarSizeMax,
+                -volumeProjection.right,
+                volumeProjection.up,
+                farMax,
+                farSizeMax,
+                0.01f,
+                farSizeMax
+            );
+            renderGVFromCurrentCamera();
+
+            setOrthographicCamera(
+                frustumCenter + volumeProjection.up * halfFarSize,
+                -volumeProjection.up,
+                volumeProjection.forward,
+                farSizeMax,
+                farMax,
+                0.01f,
+                farSizeMax
+            );
+            renderGVFromCurrentCamera();
+        }
+    }
+    else
+    {
+        updateSceneForCamera();
+        renderGVFromCurrentCamera();
+    }
 
     auto pvvRoot = mpPVVPass->getRootVar();
-    mpScene->bindShaderDataForRaytracing(pRenderContext, pvvRoot["gScene"]);
-
-    pvvRoot["gGeometryVolume"] = mpGVVolume;
     pvvRoot["gPVVVolume"] = mpPVVVolume;
     pvvRoot["PVVCB"]["gSceneMin"] = volumeMin;
     pvvRoot["PVVCB"]["gSceneExtent"] = volumeExtent;
     pvvRoot["PVVCB"]["gVolumeSize"] = mVolumeSize;
     pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
-    pvvRoot["PVVCB"]["gViewCellCenter"] = viewCellCenter;
-    pvvRoot["PVVCB"]["gViewCellRadius"] = viewCellRadius;
-    pvvRoot["PVVCB"]["gSampleCount"] = useCameraFrustum ? 1u : 9u;
-    pvvRoot["PVVCB"]["gUseCameraFrustum"] = useCameraFrustum ? 1u : 0u;
-    pvvRoot["PVVCB"]["gCameraFovYRadians"] = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
-    pvvRoot["PVVCB"]["gCameraAspectRatio"] = std::max(0.1f, mCameraAspectRatio);
-    pvvRoot["PVVCB"]["gCameraForward"] = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
     pvvRoot["PVVCB"]["gUseProjectionVolume"] = useProjectionVolume ? 1u : 0u;
     pvvRoot["PVVCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
     pvvRoot["PVVCB"]["gViewCellForward"] = volumeProjection.forward;
@@ -1562,8 +1764,92 @@ void NeuralPVSExporter::exportOneSample(
     pvvRoot["PVVCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
     pvvRoot["PVVCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
     pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
+    pvvRoot["PVVCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
+    pvvRoot["PVVCB"]["gLogDepthScale"] = mLogDepthScale;
 
-    mpPVVPass->execute(pRenderContext, mVolumeSize / 32, mVolumeSize, mVolumeDepth);
+    const uint32_t depthWidth = mpPVVDepthFbo->getWidth();
+    const uint32_t depthHeight = mpPVVDepthFbo->getHeight();
+    pvvRoot["PVVCB"]["gDepthBufferSize"] = uint2(depthWidth, depthHeight);
+
+    const uint32_t pvvSampleSteps = std::max(1u, mPVVSampleSteps);
+    const uint32_t pvvSampleCount = pvvSampleSteps * pvvSampleSteps * pvvSampleSteps;
+    const float sampleCameraFovYRadians =
+        std::clamp(sample.fovYDegrees + 2.0f * mUnityFovExpansionDegrees, 1.0f, 179.0f) *
+        3.1415926535f / 180.0f;
+
+    auto getPVVSampleOffset = [&](uint32_t sampleIndex) -> float3
+    {
+        const uint32_t n = pvvSampleSteps;
+        const uint32_t n2 = n * n;
+        const uint32_t iz = sampleIndex / n2;
+        const uint32_t iy = (sampleIndex / n) % n;
+        const uint32_t ix = sampleIndex % n;
+
+        const float tanV = std::max(0.000001f, std::tan(0.5f * volumeProjection.fovYRadians));
+        const float tanH = std::max(0.000001f, tanV * std::max(0.1f, mCameraAspectRatio));
+        const float zBound = viewCellRadius / tanH;
+        const float z = n > 1u ? -zBound + float(iz) * (2.0f * zBound / float(n - 1u)) : 0.0f;
+        const float xBound = std::max(0.0f, viewCellRadius - std::abs(z * tanH));
+        const float yBound = std::max(0.0f, viewCellRadius / tanV - std::abs(z * tanV));
+        const float x = n > 1u ? -xBound + float(ix) * (2.0f * xBound / float(n - 1u)) : 0.0f;
+        const float y = n > 1u ? -yBound + float(iy) * (2.0f * yBound / float(n - 1u)) : 0.0f;
+
+        return volumeProjection.right * x + volumeProjection.up * y + volumeProjection.forward * z;
+    };
+
+    if (useCameraFrustum && useProjectionVolume)
+    {
+        for (uint32_t sampleIndex = 0; sampleIndex < pvvSampleCount; ++sampleIndex)
+        {
+            const float3 samplePosition = viewCellCenter + getPVVSampleOffset(sampleIndex);
+            setPerspectiveCamera(
+                samplePosition,
+                volumeProjection.forward,
+                volumeProjection.up,
+                sampleCameraFovYRadians,
+                mViewCellNearPlane,
+                mViewCellFarPlane
+            );
+
+            pRenderContext->clearFbo(mpPVVDepthFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::Depth);
+            mpPVVDepthPass->getState()->setFbo(mpPVVDepthFbo);
+            mpScene->rasterize(
+                pRenderContext,
+                mpPVVDepthPass->getState().get(),
+                mpPVVDepthPass->getVars().get(),
+                RasterizerState::CullMode::Back
+            );
+
+            pvvRoot["gVisibilityDepthBuffer"] = mpPVVDepthFbo->getDepthStencilTexture();
+            pvvRoot["PVVCB"]["gSampleInvViewProj"] = mpCamera->getInvViewProjMatrix();
+            mpPVVPass->execute(pRenderContext, (depthWidth + 15u) / 16u, (depthHeight + 15u) / 16u, 1u);
+        }
+    }
+    else
+    {
+        setPerspectiveCamera(
+            viewCellCenter,
+            volumeProjection.forward,
+            volumeProjection.up,
+            sampleCameraFovYRadians,
+            mViewCellNearPlane,
+            mViewCellFarPlane
+        );
+        pRenderContext->clearFbo(mpPVVDepthFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::Depth);
+        mpPVVDepthPass->getState()->setFbo(mpPVVDepthFbo);
+        mpScene->rasterize(
+            pRenderContext,
+            mpPVVDepthPass->getState().get(),
+            mpPVVDepthPass->getVars().get(),
+            RasterizerState::CullMode::Back
+        );
+
+        pvvRoot["gVisibilityDepthBuffer"] = mpPVVDepthFbo->getDepthStencilTexture();
+        pvvRoot["PVVCB"]["gSampleInvViewProj"] = mpCamera->getInvViewProjMatrix();
+        mpPVVPass->execute(pRenderContext, (depthWidth + 15u) / 16u, (depthHeight + 15u) / 16u, 1u);
+    }
+
+    restoreCamera();
     pRenderContext->submit(true);
 
     std::vector<uint8_t> gvBytes = pRenderContext->readTextureSubresource(mpGVVolume.get(), 0);
@@ -1609,13 +1895,20 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
     metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
     metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
-    metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "camera_frustum" : "view_cell") << "\",\n";
+    metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "unity_view_cell" : "view_cell") << "\",\n";
     metadata << "  \"volume_mapping\": \"" << (mVolumeMappingMode == 1 ? "unity_projection" : "world_aabb") << "\",\n";
     metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
     metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
     metadata << "  \"view_cell_radius\": " << mViewCellRadius << ",\n";
     metadata << "  \"view_cell_near\": " << mViewCellNearPlane << ",\n";
     metadata << "  \"view_cell_far\": " << mViewCellFarPlane << ",\n";
+    metadata << "  \"sampling_factor\": " << mSamplingFactor << ",\n";
+    metadata << "  \"pvv_sample_steps\": " << mPVVSampleSteps << ",\n";
+    metadata << "  \"linear_z\": " << (mLinearZ ? "true" : "false") << ",\n";
+    metadata << "  \"log_depth_scale\": " << mLogDepthScale << ",\n";
+    metadata << "  \"unity_fov_expansion_degrees\": " << mUnityFovExpansionDegrees << ",\n";
+    metadata << "  \"high_detail\": " << (mHighDetail ? "true" : "false") << ",\n";
+    metadata << "  \"max_ortho_size\": " << mMaxOrthoSize << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";

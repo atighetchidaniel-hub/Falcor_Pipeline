@@ -20,6 +20,9 @@ cbuffer ExporterCB
     uint gPadding1;
     float3 gViewCellUp;
     uint gPadding2;
+    uint gLinearZ;
+    float gLogDepthScale;
+    uint2 gPadding3;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -42,7 +45,14 @@ bool worldToVolume01(float3 worldPos, out float3 p)
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
-    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane));
+    float z = (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane);
+    if (gLinearZ == 0u)
+    {
+        z = log2(gLogDepthScale * (depth / gViewCellNearPlane) + 1.0f) /
+            log2(gLogDepthScale * (gViewCellFarPlane / gViewCellNearPlane) + 1.0f);
+    }
+
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
 
     return all(p >= 0.0f) && all(p <= 1.0f);
 }
@@ -52,9 +62,10 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 p = float3(0.0f);
     if (worldToVolume01(vsOut.posW, p))
     {
-        uint x = min((uint)floor(p.x * (float)gVolumeSize), gVolumeSize - 1);
-        uint y = min((uint)floor(p.y * (float)gVolumeSize), gVolumeSize - 1);
-        uint z = min((uint)floor(p.z * (float)gVolumeDepth), gVolumeDepth - 1);
+        float3 dims = float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth)) - 1.0f;
+        uint x = (uint)trunc(p.x * dims.x);
+        uint y = (uint)trunc(p.y * dims.y);
+        uint z = (uint)trunc(p.z * dims.z);
 
         uint wordX = x / 32;
         uint bitInWord = x % 32;
