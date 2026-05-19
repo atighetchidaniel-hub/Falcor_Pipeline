@@ -780,7 +780,12 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     previewRoot["PreviewCB"]["gLogDepthScale"] = mRenderPVVActive ? mRenderLogDepthScale : mLogDepthScale;
 
     mpPreviewPass->getState()->setFbo(pTargetFbo);
-    mpScene->rasterize(pRenderContext, mpPreviewPass->getState().get(), mpPreviewPass->getVars().get());
+    mpScene->rasterize(
+        pRenderContext,
+        mpPreviewPass->getState().get(),
+        mpPreviewPass->getVars().get(),
+        RasterizerState::CullMode::None
+    );
 }
 
 void NeuralPVSExporter::renderPVVOverlay(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
@@ -1877,7 +1882,7 @@ void NeuralPVSExporter::exportOneSample(
                 pRenderContext,
                 mpPVVDepthPass->getState().get(),
                 mpPVVDepthPass->getVars().get(),
-                RasterizerState::CullMode::Back
+                RasterizerState::CullMode::None
             );
 
             pvvRoot["gVisibilityDepthBuffer"] = mpPVVDepthFbo->getDepthStencilTexture();
@@ -1901,7 +1906,7 @@ void NeuralPVSExporter::exportOneSample(
             pRenderContext,
             mpPVVDepthPass->getState().get(),
             mpPVVDepthPass->getVars().get(),
-            RasterizerState::CullMode::Back
+            RasterizerState::CullMode::None
         );
 
         pvvRoot["gVisibilityDepthBuffer"] = mpPVVDepthFbo->getDepthStencilTexture();
