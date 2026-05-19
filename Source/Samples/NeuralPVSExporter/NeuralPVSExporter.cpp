@@ -192,6 +192,59 @@ namespace
         return len > 0.00001f ? value / len : fallback;
     }
 
+    struct CameraBasis
+    {
+        float3 forward = float3(0.f, 0.f, -1.f);
+        float3 right = float3(1.f, 0.f, 0.f);
+        float3 up = float3(0.f, 1.f, 0.f);
+    };
+
+    CameraBasis makeCameraBasis(float3 forwardInput, float3 rightInput, float3 upInput, bool hasExplicitBasis)
+    {
+        CameraBasis basis;
+        basis.forward = normalizedOrDefault(forwardInput, basis.forward);
+
+        if (hasExplicitBasis)
+        {
+            basis.right = rightInput - basis.forward * dot(rightInput, basis.forward);
+            basis.right = normalizedOrDefault(basis.right, float3(1.f, 0.f, 0.f));
+
+            basis.up = upInput - basis.forward * dot(upInput, basis.forward) - basis.right * dot(upInput, basis.right);
+            if (length(basis.up) <= 0.00001f)
+            {
+                const float3 fallbackUp = cross(basis.forward, basis.right);
+                basis.up = dot(fallbackUp, upInput) < 0.f ? -fallbackUp : fallbackUp;
+            }
+            basis.up = normalizedOrDefault(basis.up, float3(0.f, 1.f, 0.f));
+            return basis;
+        }
+
+        const float3 upHint = std::abs(basis.forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
+        basis.right = normalizedOrDefault(cross(upHint, basis.forward), float3(1.f, 0.f, 0.f));
+        basis.up = normalizedOrDefault(cross(basis.forward, basis.right), upHint);
+        return basis;
+    }
+
+    float3 rotateByQuaternion(float qx, float qy, float qz, float qw, float3 value)
+    {
+        const float3 q = float3(qx, qy, qz);
+        const float3 t = 2.f * cross(q, value);
+        return value + qw * t + cross(q, t);
+    }
+
+    void alignBasisToForward(CameraBasis& basis, float3 forward)
+    {
+        CameraBasis zFlipped = basis;
+        zFlipped.forward.z = -zFlipped.forward.z;
+        zFlipped.right.z = -zFlipped.right.z;
+        zFlipped.up.z = -zFlipped.up.z;
+
+        if (dot(zFlipped.forward, forward) > dot(basis.forward, forward))
+        {
+            basis = zFlipped;
+        }
+    }
+
     std::string quoteCommandPath(const std::filesystem::path& path)
     {
         std::string value = path.string();
@@ -777,14 +830,11 @@ void NeuralPVSExporter::applyPreviewSample()
     mPreviewSampleIndex = std::min(mPreviewSampleIndex, uint32_t(mPreviewSamples.size() - 1u));
     const ExportSample& sample = mPreviewSamples[mPreviewSampleIndex];
 
-    const float3 forward = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
-    const float3 upHint = std::abs(forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
-    const float3 right = normalizedOrDefault(cross(upHint, forward), float3(1.f, 0.f, 0.f));
-    const float3 up = normalizedOrDefault(cross(forward, right), upHint);
+    const CameraBasis basis = makeCameraBasis(sample.forward, sample.right, sample.up, sample.hasBasis);
 
     mpCamera->setPosition(sample.center);
-    mpCamera->setTarget(sample.center + forward);
-    mpCamera->setUpVector(up);
+    mpCamera->setTarget(sample.center + basis.forward);
+    mpCamera->setUpVector(basis.up);
 
     const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
@@ -888,6 +938,16 @@ void NeuralPVSExporter::loadRenderMetadata()
             {
                 sample.forward = normalizedOrDefault(float3(forwardValues[0], forwardValues[1], forwardValues[2]), float3(0.f, 0.f, -1.f));
                 sample.hasCamera = true;
+            }
+
+            const bool metadataHasBasis = line.find("\"has_basis\": true") != std::string::npos;
+            std::vector<float> rightValues = extractFloatArrayFromLine(line, "\"right\"");
+            std::vector<float> upValues = extractFloatArrayFromLine(line, "\"up\"");
+            if (metadataHasBasis && rightValues.size() >= 3 && upValues.size() >= 3)
+            {
+                sample.right = normalizedOrDefault(float3(rightValues[0], rightValues[1], rightValues[2]), float3(1.f, 0.f, 0.f));
+                sample.up = normalizedOrDefault(float3(upValues[0], upValues[1], upValues[2]), float3(0.f, 1.f, 0.f));
+                sample.hasBasis = true;
             }
 
             float fovYDegrees = sample.fovYDegrees;
@@ -1461,10 +1521,10 @@ NeuralPVSExporter::VolumeProjectionParams NeuralPVSExporter::makeVolumeProjectio
     const float tanHalfOffsetFov = std::max(0.0001f, std::tan(0.5f * fovYRadians / aspectRatio));
     const float viewCellOffset = std::max(0.0f, viewCellRadius) / tanHalfOffsetFov;
 
-    params.forward = normalizedOrDefault(sample.forward, float3(0.f, 0.f, -1.f));
-    const float3 upHint = std::abs(params.forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
-    params.right = normalizedOrDefault(cross(upHint, params.forward), float3(1.f, 0.f, 0.f));
-    params.up = normalizedOrDefault(cross(params.forward, params.right), upHint);
+    const CameraBasis basis = makeCameraBasis(sample.forward, sample.right, sample.up, sample.hasBasis);
+    params.forward = basis.forward;
+    params.right = basis.right;
+    params.up = basis.up;
 
     params.viewCellPosition = sample.center - params.forward * viewCellOffset;
     params.nearPlane = std::max(0.001f, nearPlane);
@@ -1926,6 +1986,9 @@ void NeuralPVSExporter::writeExportMetadata(
         metadata << "\"center\": [" << samples[i].center.x << ", " << samples[i].center.y << ", " << samples[i].center.z << "], ";
         metadata << "\"has_camera\": " << (samples[i].hasCamera ? "true" : "false") << ", ";
         metadata << "\"forward\": [" << samples[i].forward.x << ", " << samples[i].forward.y << ", " << samples[i].forward.z << "], ";
+        metadata << "\"has_basis\": " << (samples[i].hasBasis ? "true" : "false") << ", ";
+        metadata << "\"right\": [" << samples[i].right.x << ", " << samples[i].right.y << ", " << samples[i].right.z << "], ";
+        metadata << "\"up\": [" << samples[i].up.x << ", " << samples[i].up.y << ", " << samples[i].up.z << "], ";
         metadata << "\"fov_y_degrees\": " << samples[i].fovYDegrees << ", ";
         metadata << "\"gv_file\": \"gv/" << std::setw(4) << std::setfill('0') << i << "_gv.bin.gz\", ";
         metadata << "\"pvv_file\": \"pvv/" << std::setw(4) << std::setfill('0') << i << "_pvv.bin.gz\", ";
@@ -2128,6 +2191,16 @@ std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(
         int forwardY = findColumn("forward_y");
         int forwardZ = findColumn("forward_z");
         int fov = findColumn("fov");
+        int rightX = findColumn("right_x");
+        int rightY = findColumn("right_y");
+        int rightZ = findColumn("right_z");
+        int upX = findColumn("up_x");
+        int upY = findColumn("up_y");
+        int upZ = findColumn("up_z");
+        int qx = findColumn("qx");
+        int qy = findColumn("qy");
+        int qz = findColumn("qz");
+        int qw = findColumn("qw");
 
         if (forwardX < 0 && tokens.size() >= 11)
         {
@@ -2135,6 +2208,10 @@ std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(
             forwardY = 8;
             forwardZ = 9;
             fov = 10;
+            qx = 3;
+            qy = 4;
+            qz = 5;
+            qw = 6;
         }
 
         if (forwardX >= 0 && forwardY >= 0 && forwardZ >= 0 && fov >= 0 &&
@@ -2150,6 +2227,49 @@ std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::loadPathSamples(
                 sample.forward = normalizedOrDefault(float3(fx, fy, fz), float3(0.f, 0.f, -1.f));
                 sample.fovYDegrees = fovYDegrees;
                 sample.hasCamera = true;
+            }
+        }
+
+        if (rightX >= 0 && rightY >= 0 && rightZ >= 0 && upX >= 0 && upY >= 0 && upZ >= 0 &&
+            size_t(std::max(std::max(std::max(rightX, rightY), std::max(rightZ, upX)), std::max(upY, upZ))) < tokens.size())
+        {
+            float rx = 1.f;
+            float ry = 0.f;
+            float rz = 0.f;
+            float ux = 0.f;
+            float uy = 1.f;
+            float uz = 0.f;
+            if (tryParseFloat(tokens[rightX], rx) && tryParseFloat(tokens[rightY], ry) && tryParseFloat(tokens[rightZ], rz) &&
+                tryParseFloat(tokens[upX], ux) && tryParseFloat(tokens[upY], uy) && tryParseFloat(tokens[upZ], uz))
+            {
+                sample.right = normalizedOrDefault(float3(rx, ry, rz), float3(1.f, 0.f, 0.f));
+                sample.up = normalizedOrDefault(float3(ux, uy, uz), float3(0.f, 1.f, 0.f));
+                sample.hasBasis = true;
+            }
+        }
+
+        if (!sample.hasBasis && qx >= 0 && qy >= 0 && qz >= 0 && qw >= 0 &&
+            size_t(std::max(std::max(qx, qy), std::max(qz, qw))) < tokens.size())
+        {
+            float qxValue = 0.f;
+            float qyValue = 0.f;
+            float qzValue = 0.f;
+            float qwValue = 1.f;
+            if (tryParseFloat(tokens[qx], qxValue) && tryParseFloat(tokens[qy], qyValue) &&
+                tryParseFloat(tokens[qz], qzValue) && tryParseFloat(tokens[qw], qwValue))
+            {
+                CameraBasis basis;
+                basis.right = normalizedOrDefault(rotateByQuaternion(qxValue, qyValue, qzValue, qwValue, float3(1.f, 0.f, 0.f)), float3(1.f, 0.f, 0.f));
+                basis.up = normalizedOrDefault(rotateByQuaternion(qxValue, qyValue, qzValue, qwValue, float3(0.f, 1.f, 0.f)), float3(0.f, 1.f, 0.f));
+                basis.forward = normalizedOrDefault(rotateByQuaternion(qxValue, qyValue, qzValue, qwValue, float3(0.f, 0.f, 1.f)), sample.forward);
+                alignBasisToForward(basis, sample.forward);
+
+                if (dot(basis.forward, sample.forward) > 0.5f)
+                {
+                    sample.right = basis.right;
+                    sample.up = basis.up;
+                    sample.hasBasis = true;
+                }
             }
         }
 

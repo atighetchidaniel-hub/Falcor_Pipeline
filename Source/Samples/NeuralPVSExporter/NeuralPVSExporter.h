@@ -32,8 +32,11 @@ private:
     {
         float3 center = float3(0.f);
         float3 forward = float3(0.f, 0.f, -1.f);
+        float3 right = float3(1.f, 0.f, 0.f);
+        float3 up = float3(0.f, 1.f, 0.f);
         float fovYDegrees = 60.f;
         bool hasCamera = false;
+        bool hasBasis = false;
     };
 
     struct VolumeProjectionParams
