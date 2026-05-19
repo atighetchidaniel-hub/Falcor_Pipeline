@@ -317,6 +317,7 @@ void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
     createGVPass();
     createPVVDepthPass();
     createPVVPass();
+    createPVVRayPass();
     createPVVRenderPass();
 }
 
@@ -407,7 +408,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             }
 
             Gui::DropdownList visibilityModes = {
-                {0, "Simple view-cell depth"},
+                {0, "Ray-tested view cell"},
                 {1, "Unity path camera frustum"},
             };
             w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
@@ -534,6 +535,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         createGVPass();
         createPVVDepthPass();
         createPVVPass();
+        createPVVRayPass();
         createPVVRenderPass();
 
         mLastExportStatus = "Loaded scene: " + mScenePath.string();
@@ -681,6 +683,22 @@ void NeuralPVSExporter::createPVVPass()
     desc.addTypeConformances(mpScene->getTypeConformances());
 
     mpPVVPass = ComputePass::create(getDevice(), desc, mpScene->getSceneDefines());
+}
+
+void NeuralPVSExporter::createPVVRayPass()
+{
+    if (!getDevice()->isFeatureSupported(Device::SupportedFeatures::RaytracingTier1_1))
+    {
+        mpPVVRayPass = nullptr;
+        return;
+    }
+
+    ProgramDesc desc;
+    desc.addShaderModules(mpScene->getShaderModules());
+    desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSRay.cs.slang").csEntry("main");
+    desc.addTypeConformances(mpScene->getTypeConformances());
+
+    mpPVVRayPass = ComputePass::create(getDevice(), desc, mpScene->getSceneDefines());
 }
 
 void NeuralPVSExporter::createPVVRenderPass()
@@ -1204,6 +1222,7 @@ void NeuralPVSExporter::startSelectedMode()
         createGVPass();
         createPVVDepthPass();
         createPVVPass();
+        createPVVRayPass();
         createPVVRenderPass();
 
         if (mExportMode == 3)
@@ -1848,28 +1867,6 @@ void NeuralPVSExporter::exportOneSample(
         renderGVFromCurrentCamera();
     }
 
-    auto pvvRoot = mpPVVPass->getRootVar();
-    pvvRoot["gPVVVolume"] = mpPVVVolume;
-    pvvRoot["PVVCB"]["gSceneMin"] = volumeMin;
-    pvvRoot["PVVCB"]["gSceneExtent"] = volumeExtent;
-    pvvRoot["PVVCB"]["gVolumeSize"] = mVolumeSize;
-    pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
-    pvvRoot["PVVCB"]["gUseProjectionVolume"] = useProjectionVolume ? 1u : 0u;
-    pvvRoot["PVVCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
-    pvvRoot["PVVCB"]["gViewCellForward"] = volumeProjection.forward;
-    pvvRoot["PVVCB"]["gViewCellRight"] = volumeProjection.right;
-    pvvRoot["PVVCB"]["gViewCellUp"] = volumeProjection.up;
-    pvvRoot["PVVCB"]["gViewCellNearPlane"] = volumeProjection.nearPlane;
-    pvvRoot["PVVCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
-    pvvRoot["PVVCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
-    pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
-    pvvRoot["PVVCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
-    pvvRoot["PVVCB"]["gLogDepthScale"] = mLogDepthScale;
-
-    const uint32_t depthWidth = mpPVVDepthFbo->getWidth();
-    const uint32_t depthHeight = mpPVVDepthFbo->getHeight();
-    pvvRoot["PVVCB"]["gDepthBufferSize"] = uint2(depthWidth, depthHeight);
-
     const uint32_t pvvSampleSteps = std::max(1u, mPVVSampleSteps);
     const uint32_t pvvSampleCount = pvvSampleSteps * pvvSampleSteps * pvvSampleSteps;
     const float sampleCameraFovYRadians =
@@ -1898,6 +1895,28 @@ void NeuralPVSExporter::exportOneSample(
 
     if (useCameraFrustum && useProjectionVolume)
     {
+        auto pvvRoot = mpPVVPass->getRootVar();
+        pvvRoot["gPVVVolume"] = mpPVVVolume;
+        pvvRoot["PVVCB"]["gSceneMin"] = volumeMin;
+        pvvRoot["PVVCB"]["gSceneExtent"] = volumeExtent;
+        pvvRoot["PVVCB"]["gVolumeSize"] = mVolumeSize;
+        pvvRoot["PVVCB"]["gVolumeDepth"] = mVolumeDepth;
+        pvvRoot["PVVCB"]["gUseProjectionVolume"] = 1u;
+        pvvRoot["PVVCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
+        pvvRoot["PVVCB"]["gViewCellForward"] = volumeProjection.forward;
+        pvvRoot["PVVCB"]["gViewCellRight"] = volumeProjection.right;
+        pvvRoot["PVVCB"]["gViewCellUp"] = volumeProjection.up;
+        pvvRoot["PVVCB"]["gViewCellNearPlane"] = volumeProjection.nearPlane;
+        pvvRoot["PVVCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
+        pvvRoot["PVVCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
+        pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
+        pvvRoot["PVVCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
+        pvvRoot["PVVCB"]["gLogDepthScale"] = mLogDepthScale;
+
+        const uint32_t depthWidth = mpPVVDepthFbo->getWidth();
+        const uint32_t depthHeight = mpPVVDepthFbo->getHeight();
+        pvvRoot["PVVCB"]["gDepthBufferSize"] = uint2(depthWidth, depthHeight);
+
         for (uint32_t sampleIndex = 0; sampleIndex < pvvSampleCount; ++sampleIndex)
         {
             const float3 samplePosition = viewCellCenter + getPVVSampleOffset(sampleIndex);
@@ -1926,26 +1945,37 @@ void NeuralPVSExporter::exportOneSample(
     }
     else
     {
-        setPerspectiveCamera(
-            viewCellCenter,
-            volumeProjection.forward,
-            volumeProjection.up,
-            sampleCameraFovYRadians,
-            mViewCellNearPlane,
-            mViewCellFarPlane
-        );
-        pRenderContext->clearFbo(mpPVVDepthFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::Depth);
-        mpPVVDepthPass->getState()->setFbo(mpPVVDepthFbo);
-        mpScene->rasterize(
-            pRenderContext,
-            mpPVVDepthPass->getState().get(),
-            mpPVVDepthPass->getVars().get(),
-            RasterizerState::CullMode::None
-        );
+        if (!mpPVVRayPass)
+        {
+            FALCOR_THROW("Ray-tested NeuralPVS PVV export requires DXR 1.1 / inline ray tracing support.");
+        }
 
-        pvvRoot["gVisibilityDepthBuffer"] = mpPVVDepthFbo->getDepthStencilTexture();
-        pvvRoot["PVVCB"]["gSampleInvViewProj"] = mpCamera->getInvViewProjMatrix();
-        mpPVVPass->execute(pRenderContext, (depthWidth + 15u) / 16u, (depthHeight + 15u) / 16u, 1u);
+        auto pvvRoot = mpPVVRayPass->getRootVar();
+        mpScene->bindShaderDataForRaytracing(pRenderContext, pvvRoot["gScene"]);
+        pvvRoot["gGeometryVolume"] = mpGVVolume;
+        pvvRoot["gPVVVolume"] = mpPVVVolume;
+        pvvRoot["PVVRayCB"]["gSceneMin"] = volumeMin;
+        pvvRoot["PVVRayCB"]["gSceneExtent"] = volumeExtent;
+        pvvRoot["PVVRayCB"]["gVolumeSize"] = mVolumeSize;
+        pvvRoot["PVVRayCB"]["gVolumeDepth"] = mVolumeDepth;
+        pvvRoot["PVVRayCB"]["gViewCellCenter"] = viewCellCenter;
+        pvvRoot["PVVRayCB"]["gViewCellRadius"] = viewCellRadius;
+        pvvRoot["PVVRayCB"]["gSampleCount"] = 9u;
+        pvvRoot["PVVRayCB"]["gUseCameraFrustum"] = 0u;
+        pvvRoot["PVVRayCB"]["gCameraFovYRadians"] = sampleCameraFovYRadians;
+        pvvRoot["PVVRayCB"]["gCameraAspectRatio"] = mCameraAspectRatio;
+        pvvRoot["PVVRayCB"]["gCameraForward"] = volumeProjection.forward;
+        pvvRoot["PVVRayCB"]["gUseProjectionVolume"] = useProjectionVolume ? 1u : 0u;
+        pvvRoot["PVVRayCB"]["gViewCellNearPlane"] = volumeProjection.nearPlane;
+        pvvRoot["PVVRayCB"]["gViewCellFarPlane"] = volumeProjection.farPlane;
+        pvvRoot["PVVRayCB"]["gTanHalfFovX"] = volumeProjection.tanHalfFovX;
+        pvvRoot["PVVRayCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
+        pvvRoot["PVVRayCB"]["gViewCellPosition"] = volumeProjection.viewCellPosition;
+        pvvRoot["PVVRayCB"]["gViewCellForward"] = volumeProjection.forward;
+        pvvRoot["PVVRayCB"]["gViewCellRight"] = volumeProjection.right;
+        pvvRoot["PVVRayCB"]["gViewCellUp"] = volumeProjection.up;
+
+        mpPVVRayPass->execute(pRenderContext, mVolumeSize / 32u, mVolumeSize, mVolumeDepth);
     }
 
     restoreCamera();

@@ -58,6 +58,7 @@ private:
     void createGVPass();
     void createPVVDepthPass();
     void createPVVPass();
+    void createPVVRayPass();
     void renderPreview(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void createPVVRenderPass();
     void renderPVVOverlay(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
@@ -231,6 +232,7 @@ private:
     ref<RasterPass> mpGVPass;
     ref<RasterPass> mpPVVDepthPass;
     ref<ComputePass> mpPVVPass;
+    ref<ComputePass> mpPVVRayPass;
     ref<FullScreenPass> mpPVVRenderPass;
     ref<Texture> mpGVVolume;
     ref<Texture> mpPVVVolume;
