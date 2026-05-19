@@ -1,4 +1,4 @@
-add_falcor_executable(NeuralPVSExporter)
+﻿add_falcor_executable(NeuralPVSExporter)
 
 target_sources(NeuralPVSExporter PRIVATE
     NeuralPVSExporter.cpp
@@ -7,7 +7,6 @@ target_sources(NeuralPVSExporter PRIVATE
     NeuralPVSGV.3d.slang
     NeuralPVSDepthOnly.3d.slang
     NeuralPVSPVV.cs.slang
-    NeuralPVSRay.cs.slang
     NeuralPVSRenderPVV.ps.slang
 )
 

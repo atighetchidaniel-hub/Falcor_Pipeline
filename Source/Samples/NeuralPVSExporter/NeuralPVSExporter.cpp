@@ -695,7 +695,7 @@ void NeuralPVSExporter::createPVVRayPass()
 
     ProgramDesc desc;
     desc.addShaderModules(mpScene->getShaderModules());
-    desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSRay.cs.slang").csEntry("main");
+    desc.addShaderLibrary("Samples/NeuralPVSExporter/NeuralPVSPVV.cs.slang").csEntry("rayMain");
     desc.addTypeConformances(mpScene->getTypeConformances());
 
     mpPVVRayPass = ComputePass::create(getDevice(), desc, mpScene->getSceneDefines());
