@@ -390,7 +390,34 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             };
             w.dropdown("Mode", exportModes, mExportMode);
 
-            w.textbox("Camera path CSV", mPathCsvText);
+            Gui::DropdownList samplingModes = {
+                {0, "Grid samples"},
+                {1, "Path CSV"},
+            };
+            w.dropdown("Sampling mode", samplingModes, mSamplingMode);
+
+            if (mSamplingMode == 1)
+            {
+                w.textbox("Camera path CSV", mPathCsvText);
+            }
+            else
+            {
+                w.var("Samples per axis", mSamplesPerAxis, 1u, 16u);
+                w.var("Sample step scale", mSampleStepScale, 0.001f, 0.5f, 0.001f);
+            }
+
+            Gui::DropdownList visibilityModes = {
+                {0, "Simple view-cell depth"},
+                {1, "Unity path camera frustum"},
+            };
+            w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
+
+            Gui::DropdownList mappingModes = {
+                {0, "World AABB volume"},
+                {1, "Unity projection volume"},
+            };
+            w.dropdown("Volume mapping", mappingModes, mVolumeMappingMode);
+
             w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
             w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
             w.var("View cell near", mViewCellNearPlane, 0.001f, 10.0f, 0.001f);
@@ -1141,9 +1168,16 @@ void NeuralPVSExporter::startSelectedMode()
 {
     try
     {
-        mSamplingMode = 1;
-        mVisibilityMode = 1;
-        mVolumeMappingMode = 1;
+        if (mSamplingMode != 1)
+        {
+            mVisibilityMode = 0;
+            mVolumeMappingMode = 0;
+        }
+        else if (mVisibilityMode == 1)
+        {
+            mVolumeMappingMode = 1;
+        }
+
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
         if (mExportMode != 3)
