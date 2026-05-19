@@ -91,49 +91,49 @@ void main(uint3 id : SV_DispatchThreadID)
     InterlockedOr(gPVVVolume[int3(wordX, y, z)], bitMask);
 }
 
-Texture3D<uint> gGeometryVolume;
-RWTexture3D<uint> gPVVVolume;
+Texture3D<uint> gRayGeometryVolume;
+RWTexture3D<uint> gRayPVVVolume;
 
 cbuffer PVVRayCB
 {
-    float3 gSceneMin;
-    uint gVolumeSize;
-    float3 gSceneExtent;
-    uint gVolumeDepth;
-    float3 gViewCellCenter;
-    float gViewCellRadius;
-    uint gSampleCount;
-    uint gUseCameraFrustum;
-    float gCameraFovYRadians;
-    float gCameraAspectRatio;
-    float3 gCameraForward;
-    uint gUseProjectionVolume;
-    float gViewCellNearPlane;
-    float gViewCellFarPlane;
-    float gTanHalfFovX;
-    float gTanHalfFovY;
-    float3 gViewCellPosition;
-    uint gPadding0;
-    float3 gViewCellForward;
-    uint gPadding1;
-    float3 gViewCellRight;
-    uint gPadding2;
-    float3 gViewCellUp;
-    uint gPadding3;
+    float3 gRaySceneMin;
+    uint gRayVolumeSize;
+    float3 gRaySceneExtent;
+    uint gRayVolumeDepth;
+    float3 gRayViewCellCenter;
+    float gRayViewCellRadius;
+    uint gRaySampleCount;
+    uint gRayUseCameraFrustum;
+    float gRayCameraFovYRadians;
+    float gRayCameraAspectRatio;
+    float3 gRayCameraForward;
+    uint gRayUseProjectionVolume;
+    float gRayViewCellNearPlane;
+    float gRayViewCellFarPlane;
+    float gRayTanHalfFovX;
+    float gRayTanHalfFovY;
+    float3 gRayViewCellPosition;
+    uint gRayPadding0;
+    float3 gRayViewCellForward;
+    uint gRayPadding1;
+    float3 gRayViewCellRight;
+    uint gRayPadding2;
+    float3 gRayViewCellUp;
+    uint gRayPadding3;
 };
 
-float3 normalizedOrFallback(float3 v, float3 fallback)
+float3 rayNormalizedOrFallback(float3 v, float3 fallback)
 {
     float len = length(v);
     return len > 1e-6f ? v / len : fallback;
 }
 
-float3 getSampleOffset(uint sampleIndex)
+float3 getRaySampleOffset(uint sampleIndex)
 {
-    if (gSampleCount <= 1u)
+    if (gRaySampleCount <= 1u)
         return float3(0.f);
 
-    float r = gViewCellRadius;
+    float r = gRayViewCellRadius;
     float3 local = float3(0.f);
     switch (sampleIndex)
     {
@@ -148,15 +148,15 @@ float3 getSampleOffset(uint sampleIndex)
     default: local = float3(-0.70710678f * r, -0.70710678f * r, 0.f); break;
     }
 
-    const float3 right = normalizedOrFallback(gViewCellRight, float3(1.f, 0.f, 0.f));
-    const float3 up = normalizedOrFallback(gViewCellUp, float3(0.f, 1.f, 0.f));
-    const float3 forward = normalizedOrFallback(gViewCellForward, float3(0.f, 0.f, -1.f));
+    const float3 right = rayNormalizedOrFallback(gRayViewCellRight, float3(1.f, 0.f, 0.f));
+    const float3 up = rayNormalizedOrFallback(gRayViewCellUp, float3(0.f, 1.f, 0.f));
+    const float3 forward = rayNormalizedOrFallback(gRayViewCellForward, float3(0.f, 0.f, -1.f));
     return right * local.x + up * local.y + forward * local.z;
 }
 
-bool isInsideCameraFrustum(float3 origin, float3 voxelWorld)
+bool isInsideRayCameraFrustum(float3 origin, float3 voxelWorld)
 {
-    if (gUseCameraFrustum == 0u)
+    if (gRayUseCameraFrustum == 0u)
         return true;
 
     float3 toVoxel = voxelWorld - origin;
@@ -165,47 +165,47 @@ bool isInsideCameraFrustum(float3 origin, float3 voxelWorld)
         return false;
 
     float3 dir = toVoxel / distance;
-    float3 forward = normalizedOrFallback(gCameraForward, normalizedOrFallback(gViewCellForward, float3(0.f, 0.f, -1.f)));
+    float3 forward = rayNormalizedOrFallback(gRayCameraForward, rayNormalizedOrFallback(gRayViewCellForward, float3(0.f, 0.f, -1.f)));
     float z = dot(dir, forward);
     if (z <= 1e-5f)
         return false;
 
-    float3 right = normalizedOrFallback(gViewCellRight, float3(1.f, 0.f, 0.f));
-    float3 up = normalizedOrFallback(gViewCellUp, float3(0.f, 1.f, 0.f));
-    float tanHalfY = tan(0.5f * gCameraFovYRadians);
-    float tanHalfX = tanHalfY * max(0.1f, gCameraAspectRatio);
+    float3 right = rayNormalizedOrFallback(gRayViewCellRight, float3(1.f, 0.f, 0.f));
+    float3 up = rayNormalizedOrFallback(gRayViewCellUp, float3(0.f, 1.f, 0.f));
+    float tanHalfY = tan(0.5f * gRayCameraFovYRadians);
+    float tanHalfX = tanHalfY * max(0.1f, gRayCameraAspectRatio);
 
     float x = dot(dir, right) / z;
     float y = dot(dir, up) / z;
     return abs(x) <= tanHalfX && abs(y) <= tanHalfY;
 }
 
-float3 voxelToWorld(uint x, uint y, uint z)
+float3 rayVoxelToWorld(uint x, uint y, uint z)
 {
     float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f) /
-        float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth));
+        float3(float(gRayVolumeSize), float(gRayVolumeSize), float(gRayVolumeDepth));
 
-    if (gUseProjectionVolume == 0u)
-        return gSceneMin + voxel01 * gSceneExtent;
+    if (gRayUseProjectionVolume == 0u)
+        return gRaySceneMin + voxel01 * gRaySceneExtent;
 
-    float depth = lerp(gViewCellNearPlane, gViewCellFarPlane, voxel01.z);
+    float depth = lerp(gRayViewCellNearPlane, gRayViewCellFarPlane, voxel01.z);
     float xNdc = voxel01.x * 2.0f - 1.0f;
     float yNdc = voxel01.y * 2.0f - 1.0f;
 
-    return gViewCellPosition +
-        normalizedOrFallback(gViewCellForward, float3(0.f, 0.f, -1.f)) * depth +
-        normalizedOrFallback(gViewCellRight, float3(1.f, 0.f, 0.f)) * (xNdc * depth * gTanHalfFovX) +
-        normalizedOrFallback(gViewCellUp, float3(0.f, 1.f, 0.f)) * (yNdc * depth * gTanHalfFovY);
+    return gRayViewCellPosition +
+        rayNormalizedOrFallback(gRayViewCellForward, float3(0.f, 0.f, -1.f)) * depth +
+        rayNormalizedOrFallback(gRayViewCellRight, float3(1.f, 0.f, 0.f)) * (xNdc * depth * gRayTanHalfFovX) +
+        rayNormalizedOrFallback(gRayViewCellUp, float3(0.f, 1.f, 0.f)) * (yNdc * depth * gRayTanHalfFovY);
 }
 
 [numthreads(4, 4, 4)]
 void rayMain(uint3 id : SV_DispatchThreadID)
 {
-    uint wordsX = gVolumeSize / 32u;
-    if (id.x >= wordsX || id.y >= gVolumeSize || id.z >= gVolumeDepth)
+    uint wordsX = gRayVolumeSize / 32u;
+    if (id.x >= wordsX || id.y >= gRayVolumeSize || id.z >= gRayVolumeDepth)
         return;
 
-    uint word = gGeometryVolume[int3(id)];
+    uint word = gRayGeometryVolume[int3(id)];
     if (word == 0u)
         return;
 
@@ -218,18 +218,18 @@ void rayMain(uint3 id : SV_DispatchThreadID)
             continue;
 
         uint x = id.x * 32u + bit;
-        float3 voxelWorld = voxelToWorld(x, id.y, id.z);
+        float3 voxelWorld = rayVoxelToWorld(x, id.y, id.z);
 
         bool visible = false;
-        for (uint sampleIndex = 0u; sampleIndex < gSampleCount && !visible; ++sampleIndex)
+        for (uint sampleIndex = 0u; sampleIndex < gRaySampleCount && !visible; ++sampleIndex)
         {
-            float3 origin = gViewCellCenter + getSampleOffset(sampleIndex);
+            float3 origin = gRayViewCellCenter + getRaySampleOffset(sampleIndex);
             float3 toVoxel = voxelWorld - origin;
             float distance = length(toVoxel);
             if (distance <= 0.001f)
                 continue;
 
-            if (!isInsideCameraFrustum(origin, voxelWorld))
+            if (!isInsideRayCameraFrustum(origin, voxelWorld))
                 continue;
 
             Ray ray = Ray(origin, toVoxel / distance, 0.01f, distance * 0.98f);
@@ -237,6 +237,6 @@ void rayMain(uint3 id : SV_DispatchThreadID)
         }
 
         if (visible)
-            InterlockedOr(gPVVVolume[int3(id)], bitMask);
+            InterlockedOr(gRayPVVVolume[int3(id)], bitMask);
     }
 }
