@@ -151,9 +151,9 @@ private:
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
-    uint32_t mVisibilityMode = 1; // 0 = view cell rays, 1 = Unity viewcell sample cameras
+    uint32_t mVisibilityMode = 0; // 0 = view cell rays, 1 = Unity viewcell sample cameras
     float mCameraAspectRatio = 1.777778f;
-    uint32_t mVolumeMappingMode = 1; // 0 = world AABB, 1 = Unity view-cell projection
+    uint32_t mVolumeMappingMode = 0; // 0 = world AABB, 1 = Unity view-cell projection
     float mViewCellRadius = 0.3f;
     float mViewCellNearPlane = 0.3f;
     float mViewCellFarPlane = 30.0f;

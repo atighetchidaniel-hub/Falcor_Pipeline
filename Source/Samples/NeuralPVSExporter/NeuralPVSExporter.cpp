@@ -380,7 +380,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     }
 
     {
-        auto group = w.group("Unity Pipeline", true);
+        auto group = w.group("Falcor Pipeline", true);
         if (group)
         {
             Gui::DropdownList exportModes = {
@@ -407,17 +407,25 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 w.var("Sample step scale", mSampleStepScale, 0.001f, 0.5f, 0.001f);
             }
 
-            Gui::DropdownList visibilityModes = {
-                {0, "Ray-tested view cell"},
-                {1, "Unity path camera frustum"},
-            };
-            w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
+            mVisibilityMode = 0;
+            mVolumeMappingMode = 0;
+            w.text("Visibility mode: Ray-tested view cell");
+            w.text("Volume mapping: World AABB volume");
 
-            Gui::DropdownList mappingModes = {
-                {0, "World AABB volume"},
-                {1, "Unity projection volume"},
-            };
-            w.dropdown("Volume mapping", mappingModes, mVolumeMappingMode);
+            // Unity projection/frustum mode is intentionally kept in the codebase
+            // for future comparison, but hidden from the UI while the thesis
+            // pipeline uses the stable Falcor-native ray/world mode.
+            // Gui::DropdownList visibilityModes = {
+            //     {0, "Ray-tested view cell"},
+            //     {1, "Unity path camera frustum"},
+            // };
+            // w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
+            //
+            // Gui::DropdownList mappingModes = {
+            //     {0, "World AABB volume"},
+            //     {1, "Unity projection volume"},
+            // };
+            // w.dropdown("Volume mapping", mappingModes, mVolumeMappingMode);
 
             w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
             w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
@@ -427,7 +435,8 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.var("PVV sample steps", mPVVSampleSteps, 1u, 20u);
             w.checkbox("Linear Z", mLinearZ);
             w.var("Log depth scale", mLogDepthScale, 0.0001f, 1.0f, 0.0001f);
-            w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
+            // Unity/FOV expansion is only used by the hidden Unity projection mode.
+            // w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
             w.checkbox("High-detail GV cameras", mHighDetail);
             w.var("Max ortho size", mMaxOrthoSize, 1.0f, 500.0f, 1.0f);
             if (mExportMode == 3)
