@@ -87,6 +87,9 @@ bool worldToVolume01(float3 worldPos, out float3 p)
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
+    // Linear-Z: z = (depth - near) / (far - near).
+    // Keep this in sync with NeuralPVSGV.3d.slang and NeuralPVSPVV.cs.slang so
+    // preview classification matches the exported GV/PVV volumes.
     float z = (depth - gViewCellNearPlane) / (gViewCellFarPlane - gViewCellNearPlane);
     if (gLinearZ == 0u)
     {

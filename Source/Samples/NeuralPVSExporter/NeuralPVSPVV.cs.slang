@@ -40,6 +40,10 @@ bool worldToVolume01(float3 worldPos, out float3 p)
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
+    // Linear-Z: z = (depth - near) / (far - near).
+    // Maps depth==near → 0, depth==far → 1. Consistent with the inverse lerp(near,far,z)
+    // used in rayVoxelToWorld(). Using (depth + near) would push far-plane voxels above 1.0
+    // and cause them to be rejected by the all(p <= 1.0f) guard.
     float z = (depth - gViewCellNearPlane) / max(1e-6f, gViewCellFarPlane - gViewCellNearPlane);
     if (gLinearZ == 0u)
     {
