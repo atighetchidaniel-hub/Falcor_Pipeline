@@ -132,6 +132,7 @@ private:
     void clearCapturedPath();
     void saveCapturedPathCsv();
     void useCapturedPathForExport();
+    std::vector<ExportSample> resampleCapturedPath(uint32_t targetSampleCount) const;
     void writePathCsv(const std::filesystem::path& path, const std::vector<ExportSample>& samples) const;
     std::vector<uint8_t> readGzipStoredFile(const std::filesystem::path& path) const;
 
@@ -158,6 +159,7 @@ private:
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
     std::string mCapturedPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
+    uint32_t mCapturedPathOutputSamples = 128;
     uint32_t mVisibilityMode = 0; // 0 = view cell rays, 1 = Unity viewcell sample cameras
     float mCameraAspectRatio = 1.777778f;
     uint32_t mVolumeMappingMode = 0; // 0 = world AABB, 1 = Unity view-cell projection

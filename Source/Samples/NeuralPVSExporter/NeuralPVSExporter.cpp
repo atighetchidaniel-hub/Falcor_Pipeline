@@ -496,6 +496,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
         if (group)
         {
             w.textbox("Capture CSV", mCapturedPathCsvText);
+            w.var("Saved samples", mCapturedPathOutputSamples, 1u, 4096u);
             w.text("Captured waypoints: " + std::to_string(mCapturedPathSamples.size()));
             w.text("Hotkeys: F9 append, F10 save");
 
@@ -997,8 +998,10 @@ void NeuralPVSExporter::saveCapturedPathCsv()
 
     try
     {
-        writePathCsv(std::filesystem::path(mCapturedPathCsvText), mCapturedPathSamples);
-        mLastExportStatus = "Saved " + std::to_string(mCapturedPathSamples.size()) + " camera path waypoints to " + mCapturedPathCsvText + ".";
+        const std::vector<ExportSample> outputSamples = resampleCapturedPath(mCapturedPathOutputSamples);
+        writePathCsv(std::filesystem::path(mCapturedPathCsvText), outputSamples);
+        mLastExportStatus = "Saved " + std::to_string(outputSamples.size()) + " camera path samples from " +
+            std::to_string(mCapturedPathSamples.size()) + " waypoints to " + mCapturedPathCsvText + ".";
     }
     catch (const std::exception& e)
     {
@@ -1028,6 +1031,68 @@ void NeuralPVSExporter::useCapturedPathForExport()
     {
         mLastExportStatus = "Can't use captured path: " + std::string(e.what());
     }
+}
+
+std::vector<NeuralPVSExporter::ExportSample> NeuralPVSExporter::resampleCapturedPath(uint32_t targetSampleCount) const
+{
+    if (mCapturedPathSamples.empty())
+        return {};
+
+    targetSampleCount = std::max(1u, targetSampleCount);
+    if (mCapturedPathSamples.size() == 1 || targetSampleCount == uint32_t(mCapturedPathSamples.size()))
+        return mCapturedPathSamples;
+
+    std::vector<float> cumulativeDistance(mCapturedPathSamples.size(), 0.f);
+    for (size_t i = 1; i < mCapturedPathSamples.size(); ++i)
+    {
+        cumulativeDistance[i] = cumulativeDistance[i - 1] + length(mCapturedPathSamples[i].center - mCapturedPathSamples[i - 1].center);
+    }
+
+    const float totalDistance = cumulativeDistance.back();
+    if (totalDistance <= 0.00001f)
+    {
+        std::vector<ExportSample> repeated(targetSampleCount, mCapturedPathSamples.front());
+        return repeated;
+    }
+
+    std::vector<ExportSample> resampled;
+    resampled.reserve(targetSampleCount);
+
+    size_t segment = 0;
+    for (uint32_t i = 0; i < targetSampleCount; ++i)
+    {
+        const float targetDistance = targetSampleCount == 1 ? 0.f : totalDistance * float(i) / float(targetSampleCount - 1u);
+        while (segment + 1 < cumulativeDistance.size() && cumulativeDistance[segment + 1] < targetDistance)
+        {
+            ++segment;
+        }
+
+        const size_t nextSegment = std::min(segment + 1, mCapturedPathSamples.size() - 1);
+        const float segmentDistance = cumulativeDistance[nextSegment] - cumulativeDistance[segment];
+        const float localT = segmentDistance > 0.00001f ? (targetDistance - cumulativeDistance[segment]) / segmentDistance : 0.f;
+        const float clampedT = std::clamp(localT, 0.f, 1.f);
+
+        const ExportSample& a = mCapturedPathSamples[segment];
+        const ExportSample& b = mCapturedPathSamples[nextSegment];
+
+        ExportSample sample;
+        sample.center = a.center * (1.f - clampedT) + b.center * clampedT;
+        sample.forward = normalizedOrDefault(a.forward * (1.f - clampedT) + b.forward * clampedT, a.forward);
+        sample.right = normalizedOrDefault(a.right * (1.f - clampedT) + b.right * clampedT, a.right);
+        sample.up = normalizedOrDefault(a.up * (1.f - clampedT) + b.up * clampedT, a.up);
+        sample.fovYDegrees = a.fovYDegrees * (1.f - clampedT) + b.fovYDegrees * clampedT;
+        sample.hasCamera = true;
+        sample.hasBasis = true;
+
+        const CameraBasis basis = makeCameraBasis(sample.forward, sample.right, sample.up, true);
+        sample.forward = basis.forward;
+        sample.right = basis.right;
+        sample.up = basis.up;
+
+        resampled.push_back(sample);
+    }
+
+    return resampled;
 }
 
 void NeuralPVSExporter::writePathCsv(const std::filesystem::path& path, const std::vector<ExportSample>& samples) const
