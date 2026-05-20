@@ -492,6 +492,37 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     }
 
     {
+        auto group = w.group("Camera Path Capture", true);
+        if (group)
+        {
+            w.textbox("Capture CSV", mCapturedPathCsvText);
+            w.text("Captured waypoints: " + std::to_string(mCapturedPathSamples.size()));
+            w.text("Hotkeys: F9 append, F10 save");
+
+            if (w.button("Append current camera"))
+            {
+                appendCurrentCameraToCapturedPath();
+            }
+            if (w.button("Remove last waypoint"))
+            {
+                removeLastCapturedPathSample();
+            }
+            if (w.button("Clear captured path"))
+            {
+                clearCapturedPath();
+            }
+            if (w.button("Save captured CSV"))
+            {
+                saveCapturedPathCsv();
+            }
+            if (w.button("Use captured path"))
+            {
+                useCapturedPathForExport();
+            }
+        }
+    }
+
+    {
         auto group = w.group("Path Preview", true);
         if (group)
         {
@@ -581,6 +612,18 @@ bool NeuralPVSExporter::onKeyEvent(const KeyboardEvent& keyEvent)
     {
         mStopRequested = true;
         stopCurrentMode();
+        return true;
+    }
+
+    if (keyEvent.type == KeyboardEvent::Type::KeyPressed && keyEvent.key == Input::Key::F9)
+    {
+        appendCurrentCameraToCapturedPath();
+        return true;
+    }
+
+    if (keyEvent.type == KeyboardEvent::Type::KeyPressed && keyEvent.key == Input::Key::F10)
+    {
+        saveCapturedPathCsv();
         return true;
     }
 
@@ -898,6 +941,121 @@ void NeuralPVSExporter::applyPreviewSample()
     const float fovYRadians = std::clamp(sample.fovYDegrees, 1.0f, 179.0f) * 3.1415926535f / 180.0f;
     mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
     mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
+}
+
+void NeuralPVSExporter::appendCurrentCameraToCapturedPath()
+{
+    if (!mpCamera)
+    {
+        mLastExportStatus = "No camera is loaded. Load a scene first.";
+        return;
+    }
+
+    ExportSample sample;
+    sample.center = mpCamera->getPosition();
+    sample.forward = normalizedOrDefault(mpCamera->getTarget() - sample.center, float3(0.f, 0.f, -1.f));
+    sample.up = normalizedOrDefault(mpCamera->getUpVector(), float3(0.f, 1.f, 0.f));
+    sample.right = normalizedOrDefault(cross(sample.up, sample.forward), float3(1.f, 0.f, 0.f));
+    sample.up = normalizedOrDefault(cross(sample.forward, sample.right), sample.up);
+
+    const float fovYRadians = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
+    sample.fovYDegrees = std::isfinite(fovYRadians) && fovYRadians > 0.f
+        ? std::clamp(fovYRadians * 180.f / 3.1415926535f, 1.f, 179.f)
+        : 60.f;
+    sample.hasCamera = true;
+    sample.hasBasis = true;
+
+    mCapturedPathSamples.push_back(sample);
+    mLastExportStatus = "Captured waypoint " + std::to_string(mCapturedPathSamples.size() - 1u) + ".";
+}
+
+void NeuralPVSExporter::removeLastCapturedPathSample()
+{
+    if (mCapturedPathSamples.empty())
+    {
+        mLastExportStatus = "Captured path is already empty.";
+        return;
+    }
+
+    mCapturedPathSamples.pop_back();
+    mLastExportStatus = "Removed last waypoint. Captured waypoints: " + std::to_string(mCapturedPathSamples.size()) + ".";
+}
+
+void NeuralPVSExporter::clearCapturedPath()
+{
+    mCapturedPathSamples.clear();
+    mLastExportStatus = "Cleared captured camera path.";
+}
+
+void NeuralPVSExporter::saveCapturedPathCsv()
+{
+    if (mCapturedPathSamples.empty())
+    {
+        mLastExportStatus = "Captured path is empty. Fly through the scene and append at least one waypoint.";
+        return;
+    }
+
+    try
+    {
+        writePathCsv(std::filesystem::path(mCapturedPathCsvText), mCapturedPathSamples);
+        mLastExportStatus = "Saved " + std::to_string(mCapturedPathSamples.size()) + " camera path waypoints to " + mCapturedPathCsvText + ".";
+    }
+    catch (const std::exception& e)
+    {
+        mLastExportStatus = "Failed to save captured path: " + std::string(e.what());
+    }
+}
+
+void NeuralPVSExporter::useCapturedPathForExport()
+{
+    if (!mCapturedPathSamples.empty())
+    {
+        saveCapturedPathCsv();
+    }
+
+    mPathCsvText = mCapturedPathCsvText;
+    mSamplingMode = 1;
+
+    try
+    {
+        mPreviewSamples = loadPathSamples(std::filesystem::path(mPathCsvText));
+        mPreviewSampleIndex = 0;
+        mPreviewAccumulator = 0.0;
+        applyPreviewSample();
+        mLastExportStatus = "Using captured path with " + std::to_string(mPreviewSamples.size()) + " samples.";
+    }
+    catch (const std::exception& e)
+    {
+        mLastExportStatus = "Can't use captured path: " + std::string(e.what());
+    }
+}
+
+void NeuralPVSExporter::writePathCsv(const std::filesystem::path& path, const std::vector<ExportSample>& samples) const
+{
+    const std::filesystem::path parent = path.parent_path();
+    if (!parent.empty())
+    {
+        std::filesystem::create_directories(parent);
+    }
+
+    std::ofstream out(path);
+    if (!out)
+    {
+        throw std::runtime_error("Failed to open path CSV " + path.string());
+    }
+
+    out << std::setprecision(9);
+    out << "x,y,z,forward_x,forward_y,forward_z,right_x,right_y,right_z,up_x,up_y,up_z,fov\n";
+
+    for (const ExportSample& sample : samples)
+    {
+        const CameraBasis basis = makeCameraBasis(sample.forward, sample.right, sample.up, sample.hasBasis);
+        out << sample.center.x << "," << sample.center.y << "," << sample.center.z << ","
+            << basis.forward.x << "," << basis.forward.y << "," << basis.forward.z << ","
+            << basis.right.x << "," << basis.right.y << "," << basis.right.z << ","
+            << basis.up.x << "," << basis.up.y << "," << basis.up.z << ","
+            << std::clamp(sample.fovYDegrees, 1.f, 179.f) << "\n";
+    }
 }
 
 void NeuralPVSExporter::loadRenderMetadata()
