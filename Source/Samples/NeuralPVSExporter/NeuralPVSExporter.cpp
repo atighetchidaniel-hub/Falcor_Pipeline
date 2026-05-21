@@ -916,6 +916,16 @@ void NeuralPVSExporter::renderPVVOverlay(RenderContext* pRenderContext, const re
     const ExportSample& sample = mRenderSamples[mRenderSampleIndex];
     const float3 volumeMin = sample.center - mRenderVolumeExtent * 0.5f;
 
+    // Build projection params for projection-volume mode (mirrors the preview pass path).
+    const uint32_t overlayMappingMode = mRenderVolumeMappingMode == 1u && sample.hasCamera ? 1u : 0u;
+    const VolumeProjectionParams overlayProjection = makeVolumeProjection(
+        sample,
+        mRenderViewCellRadius,
+        mRenderViewCellNearPlane,
+        mRenderViewCellFarPlane,
+        mRenderUnityFovExpansionDegrees
+    );
+
     auto root = mpPVVRenderPass->getRootVar();
     root["gVolume"] = mpRenderVolume;
     root["RenderCB"]["gInvViewProj"] = mpCamera->getInvViewProjMatrix();
@@ -928,6 +938,17 @@ void NeuralPVSExporter::renderPVVOverlay(RenderContext* pRenderContext, const re
     root["RenderCB"]["gOpacity"] = std::clamp(mRenderOpacity, 0.01f, 1.0f);
     root["RenderCB"]["gStepScale"] = std::clamp(mRenderStepScale, 0.25f, 4.0f);
     root["RenderCB"]["gVolumeKind"] = mRenderVolumeKind;
+    root["RenderCB"]["gVolumeMappingMode"] = overlayMappingMode;
+    root["RenderCB"]["gLinearZ"] = mRenderLinearZ ? 1u : 0u;
+    root["RenderCB"]["gLogDepthScale"] = mRenderLogDepthScale;
+    root["RenderCB"]["gViewCellPosition"] = overlayProjection.viewCellPosition;
+    root["RenderCB"]["gViewCellForward"] = overlayProjection.forward;
+    root["RenderCB"]["gViewCellRight"] = overlayProjection.right;
+    root["RenderCB"]["gViewCellUp"] = overlayProjection.up;
+    root["RenderCB"]["gViewCellNearPlane"] = overlayProjection.nearPlane;
+    root["RenderCB"]["gViewCellFarPlane"] = overlayProjection.farPlane;
+    root["RenderCB"]["gTanHalfFovX"] = overlayProjection.tanHalfFovX;
+    root["RenderCB"]["gTanHalfFovY"] = overlayProjection.tanHalfFovY;
 
     mpPVVRenderPass->execute(pRenderContext, pTargetFbo);
 }
@@ -2233,6 +2254,8 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVRayCB"]["gRayViewCellForward"] = volumeProjection.forward;
         pvvRoot["PVVRayCB"]["gRayViewCellRight"] = volumeProjection.right;
         pvvRoot["PVVRayCB"]["gRayViewCellUp"] = volumeProjection.up;
+        pvvRoot["PVVRayCB"]["gRayLinearZ"] = mLinearZ ? 1u : 0u;
+        pvvRoot["PVVRayCB"]["gRayLogDepthScale"] = mLogDepthScale;
 
         mpPVVRayPass->execute(pRenderContext, mVolumeSize / 32u, mVolumeSize, mVolumeDepth);
     }

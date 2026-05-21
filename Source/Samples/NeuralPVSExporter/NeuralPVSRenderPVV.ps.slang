@@ -12,6 +12,22 @@ cbuffer RenderCB
     float3 gSampleCenter;
     float gStepScale;
     uint gVolumeKind;
+    uint gVolumeMappingMode;  // 0 = world AABB, 1 = projection frustum
+    uint gLinearZ;
+    float gLogDepthScale;
+    uint gPadding0;
+    float gViewCellNearPlane;
+    float gViewCellFarPlane;
+    float gTanHalfFovX;
+    float gTanHalfFovY;
+    float3 gViewCellPosition;
+    uint gPadding1;
+    float3 gViewCellForward;
+    uint gPadding2;
+    float3 gViewCellRight;
+    uint gPadding3;
+    float3 gViewCellUp;
+    uint gPadding4;
 };
 
 float safeRcp(float value)
@@ -32,15 +48,81 @@ bool intersectBox(float3 origin, float3 direction, float3 boxMin, float3 boxMax,
     return tFar >= max(tNear, 0.0f);
 }
 
+// Returns the world-space AABB of the view frustum for ray-march bounds in projection mode.
+void getFrustumAABB(out float3 boxMin, out float3 boxMax)
+{
+    float3 fwd   = normalize(gViewCellForward);
+    float3 right = normalize(gViewCellRight);
+    float3 up    = normalize(gViewCellUp);
+    float3 pos   = gViewCellPosition;
+    float nearZ  = gViewCellNearPlane;
+    float farZ   = gViewCellFarPlane;
+    float tx     = gTanHalfFovX;
+    float ty     = gTanHalfFovY;
+
+    // 8 frustum corners
+    float3 corners[8];
+    corners[0] = pos + fwd * nearZ + right * ( nearZ * tx) + up * ( nearZ * ty);
+    corners[1] = pos + fwd * nearZ + right * ( nearZ * tx) + up * (-nearZ * ty);
+    corners[2] = pos + fwd * nearZ + right * (-nearZ * tx) + up * ( nearZ * ty);
+    corners[3] = pos + fwd * nearZ + right * (-nearZ * tx) + up * (-nearZ * ty);
+    corners[4] = pos + fwd * farZ  + right * ( farZ  * tx) + up * ( farZ  * ty);
+    corners[5] = pos + fwd * farZ  + right * ( farZ  * tx) + up * (-farZ  * ty);
+    corners[6] = pos + fwd * farZ  + right * (-farZ  * tx) + up * ( farZ  * ty);
+    corners[7] = pos + fwd * farZ  + right * (-farZ  * tx) + up * (-farZ  * ty);
+
+    boxMin = corners[0];
+    boxMax = corners[0];
+    for (int i = 1; i < 8; ++i)
+    {
+        boxMin = min(boxMin, corners[i]);
+        boxMax = max(boxMax, corners[i]);
+    }
+}
+
+// Maps a world position to [0,1]^3 volume coordinates.
+// Mirrors worldToVolume01 in NeuralPVSGV.3d.slang and NeuralPVSPVV.cs.slang.
+bool worldToVolume01(float3 worldPos, out float3 p)
+{
+    if (gVolumeMappingMode == 0u)
+    {
+        p = (worldPos - gVolumeMin) / gVolumeExtent;
+        return all(p >= 0.0f) && all(p <= 1.0f);
+    }
+
+    float3 rel = worldPos - gViewCellPosition;
+    float depth = dot(rel, normalize(gViewCellForward));
+    if (depth < gViewCellNearPlane || depth > gViewCellFarPlane)
+    {
+        p = float3(0.0f);
+        return false;
+    }
+
+    float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
+    float yNdc = dot(rel, normalize(gViewCellUp))    / max(1e-6f, depth * gTanHalfFovY);
+
+    // Linear-Z: z = (depth - near) / (far - near). Keep in sync with GV and PVV shaders.
+    float z = (depth - gViewCellNearPlane) / max(1e-6f, gViewCellFarPlane - gViewCellNearPlane);
+    if (gLinearZ == 0u)
+    {
+        z = log2(gLogDepthScale * (depth / gViewCellNearPlane) + 1.0f) /
+            log2(gLogDepthScale * (gViewCellFarPlane / gViewCellNearPlane) + 1.0f);
+    }
+
+    p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
+    return all(p >= 0.0f) && all(p <= 1.0f);
+}
+
 bool isOccupied(float3 worldPos)
 {
-    float3 p = (worldPos - gVolumeMin) / gVolumeExtent;
-    if (any(p < 0.0f) || any(p > 1.0f))
+    float3 p = float3(0.0f);
+    if (!worldToVolume01(worldPos, p))
         return false;
 
-    uint x = min((uint)floor(p.x * (float)gVolumeSize), gVolumeSize - 1u);
-    uint y = min((uint)floor(p.y * (float)gVolumeSize), gVolumeSize - 1u);
-    uint z = min((uint)floor(p.z * (float)gVolumeDepth), gVolumeDepth - 1u);
+    // Use floor(p * size) clamped — consistent with GV write (after fix) and PVV/preview reads.
+    uint x = min((uint)floor(p.x * float(gVolumeSize)), gVolumeSize - 1u);
+    uint y = min((uint)floor(p.y * float(gVolumeSize)), gVolumeSize - 1u);
+    uint z = min((uint)floor(p.z * float(gVolumeDepth)), gVolumeDepth - 1u);
     uint wordX = x / 32u;
     uint bitInWord = x % 32u;
     uint bitMask = 1u << (31u - bitInWord);
@@ -55,8 +137,18 @@ float4 main(float2 texC : TEXCOORD) : SV_TARGET
     float3 farW = farH.xyz / farH.w;
     float3 rayDir = normalize(farW - gCameraPos);
 
-    float3 boxMin = gVolumeMin;
-    float3 boxMax = gVolumeMin + gVolumeExtent;
+    float3 boxMin;
+    float3 boxMax;
+    if (gVolumeMappingMode == 0u)
+    {
+        boxMin = gVolumeMin;
+        boxMax = gVolumeMin + gVolumeExtent;
+    }
+    else
+    {
+        getFrustumAABB(boxMin, boxMax);
+    }
+
     float tNear;
     float tFar;
     if (!intersectBox(gCameraPos, rayDir, boxMin, boxMax, tNear, tFar))

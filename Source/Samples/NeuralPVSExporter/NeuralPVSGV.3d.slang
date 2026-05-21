@@ -66,10 +66,12 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 p = float3(0.0f);
     if (worldToVolume01(vsOut.posW, p))
     {
-        float3 dims = float3(float(gVolumeSize), float(gVolumeSize), float(gVolumeDepth)) - 1.0f;
-        uint x = (uint)trunc(p.x * dims.x);
-        uint y = (uint)trunc(p.y * dims.y);
-        uint z = (uint)trunc(p.z * dims.z);
+        // Use floor(p * size) clamped to [0, size-1] — consistent with PVV write and preview read.
+        // The old trunc(p * (size-1)) formula shifted voxel addresses by ~half a voxel at mid-range,
+        // causing a spatial mismatch between GV writes and PVV/preview reads.
+        uint x = min((uint)floor(p.x * float(gVolumeSize)), gVolumeSize - 1u);
+        uint y = min((uint)floor(p.y * float(gVolumeSize)), gVolumeSize - 1u);
+        uint z = min((uint)floor(p.z * float(gVolumeDepth)), gVolumeDepth - 1u);
 
         uint wordX = x / 32;
         uint bitInWord = x % 32;

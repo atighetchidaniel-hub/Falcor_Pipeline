@@ -123,7 +123,9 @@ cbuffer PVVRayCB
     float3 gRayViewCellRight;
     uint gRayPadding2;
     float3 gRayViewCellUp;
-    uint gRayPadding3;
+    uint gRayLinearZ;          // 1 = linear (lerp), 0 = log-depth — must match GV generation setting
+    float gRayLogDepthScale;   // only used when gRayLinearZ == 0
+    uint3 gRayPadding4;
 };
 
 float3 rayNormalizedOrFallback(float3 v, float3 fallback)
@@ -192,7 +194,20 @@ float3 rayVoxelToWorld(uint x, uint y, uint z)
     if (gRayUseProjectionVolume == 0u)
         return gRaySceneMin + voxel01 * gRaySceneExtent;
 
-    float depth = lerp(gRayViewCellNearPlane, gRayViewCellFarPlane, voxel01.z);
+    // Invert the depth encoding used during GV generation.
+    // Linear-Z forward:  z = (depth - near) / (far - near)  → inverse: depth = lerp(near, far, z)
+    // Log-depth forward: z = log2(S*(depth/near)+1) / log2(S*(far/near)+1) → inverse: exponential
+    float depth;
+    if (gRayLinearZ != 0u)
+    {
+        depth = lerp(gRayViewCellNearPlane, gRayViewCellFarPlane, voxel01.z);
+    }
+    else
+    {
+        float S    = gRayLogDepthScale;
+        float denom = log2(S * (gRayViewCellFarPlane / gRayViewCellNearPlane) + 1.0f);
+        depth = gRayViewCellNearPlane * (exp2(voxel01.z * denom) - 1.0f) / max(1e-9f, S);
+    }
     float xNdc = voxel01.x * 2.0f - 1.0f;
     float yNdc = voxel01.y * 2.0f - 1.0f;
 
