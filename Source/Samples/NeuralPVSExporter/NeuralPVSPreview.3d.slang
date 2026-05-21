@@ -142,17 +142,22 @@ bool isVisibleInPVV(float3 worldPos)
     if (gPVVFilter == 4u)
     {
         int3 center = int3(int(x), int(y), int(z));
-        for (int dz = -2; dz <= 2; ++dz)
+        if (loadPVVBitClamped(center))
+            return true;
+
+        for (int r = 1; r <= 2; ++r)
         {
-            for (int dy = -2; dy <= 2; ++dy)
+            if (loadPVVBitClamped(center + int3( r, 0, 0)) ||
+                loadPVVBitClamped(center + int3(-r, 0, 0)) ||
+                loadPVVBitClamped(center + int3(0,  r, 0)) ||
+                loadPVVBitClamped(center + int3(0, -r, 0)) ||
+                loadPVVBitClamped(center + int3(0, 0,  r)) ||
+                loadPVVBitClamped(center + int3(0, 0, -r)))
             {
-                for (int dx = -2; dx <= 2; ++dx)
-                {
-                    if (loadPVVBitClamped(center + int3(dx, dy, dz)))
-                        return true;
-                }
+                return true;
             }
         }
+
         return false;
     }
 

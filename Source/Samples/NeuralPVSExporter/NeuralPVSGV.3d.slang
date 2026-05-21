@@ -22,7 +22,8 @@ cbuffer ExporterCB
     uint gPadding2;
     uint gLinearZ;
     float gLogDepthScale;
-    uint2 gPadding3;
+    uint gGVDilationRadius;
+    uint gPadding3;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -69,15 +70,34 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         // Use floor(p * size) clamped to [0, size-1] — consistent with PVV write and preview read.
         // The old trunc(p * (size-1)) formula shifted voxel addresses by ~half a voxel at mid-range,
         // causing a spatial mismatch between GV writes and PVV/preview reads.
-        uint x = min((uint)floor(p.x * float(gVolumeSize)), gVolumeSize - 1u);
-        uint y = min((uint)floor(p.y * float(gVolumeSize)), gVolumeSize - 1u);
-        uint z = min((uint)floor(p.z * float(gVolumeDepth)), gVolumeDepth - 1u);
+        int x = int(min((uint)floor(p.x * float(gVolumeSize)), gVolumeSize - 1u));
+        int y = int(min((uint)floor(p.y * float(gVolumeSize)), gVolumeSize - 1u));
+        int z = int(min((uint)floor(p.z * float(gVolumeDepth)), gVolumeDepth - 1u));
+        int radius = int(min(gGVDilationRadius, 1u));
 
-        uint wordX = x / 32;
-        uint bitInWord = x % 32;
-        uint bitMask = 1u << (31u - bitInWord);
+        for (int dz = -radius; dz <= radius; ++dz)
+        {
+            for (int dy = -radius; dy <= radius; ++dy)
+            {
+                for (int dx = -radius; dx <= radius; ++dx)
+                {
+                    int vx = x + dx;
+                    int vy = y + dy;
+                    int vz = z + dz;
+                    if (vx < 0 || vy < 0 || vz < 0 ||
+                        vx >= int(gVolumeSize) || vy >= int(gVolumeSize) || vz >= int(gVolumeDepth))
+                    {
+                        continue;
+                    }
 
-        InterlockedOr(gGeometryVolume[int3(wordX, y, z)], bitMask);
+                    uint wordX = uint(vx) / 32u;
+                    uint bitInWord = uint(vx) % 32u;
+                    uint bitMask = 1u << (31u - bitInWord);
+
+                    InterlockedOr(gGeometryVolume[int3(int(wordX), vy, vz)], bitMask);
+                }
+            }
+        }
     }
 
     return float4(p, 1.0f);

@@ -173,6 +173,7 @@ private:
     float mUnityFovExpansionDegrees = 30.0f;
     bool mHighDetail = false;
     float mMaxOrthoSize = 80.0f;
+    uint32_t mGVDilationRadius = 1;
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;
@@ -188,7 +189,7 @@ private:
     std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256/predicted_pvv";
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV, 3 = scene only
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
-    uint32_t mRenderPVVFilter = 2; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = 5x5x5 box
+    uint32_t mRenderPVVFilter = 2; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = radius-2 cross
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;

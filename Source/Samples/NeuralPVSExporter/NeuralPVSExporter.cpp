@@ -439,6 +439,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             // w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
             w.checkbox("High-detail GV cameras", mHighDetail);
             w.var("Max ortho size", mMaxOrthoSize, 1.0f, 500.0f, 1.0f);
+            w.var("GV dilation radius", mGVDilationRadius, 0u, 1u);
             if (mExportMode == 3)
             {
                 if (w.button("Use generated dataset paths"))
@@ -518,7 +519,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 {1, "None (exact)"},
                 {2, "Box 3x3x3 (surface tolerant)"},
                 {3, "Trilinear (debug)"},
-                {4, "Wide box 5x5x5 (road test)"},
+                {4, "Cross radius 2 (cheap road test)"},
             };
             w.dropdown("RenderPVV filter", pvvFilters, mRenderPVVFilter);
             w.checkbox("Write debug projections", mWriteDebugProjections);
@@ -2073,6 +2074,7 @@ void NeuralPVSExporter::exportOneSample(
     gvRoot["ExporterCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
     gvRoot["ExporterCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
     gvRoot["ExporterCB"]["gLogDepthScale"] = mLogDepthScale;
+    gvRoot["ExporterCB"]["gGVDilationRadius"] = mGVDilationRadius;
 
     if (!mpCamera)
     {
@@ -2436,6 +2438,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"unity_fov_expansion_degrees\": " << mUnityFovExpansionDegrees << ",\n";
     metadata << "  \"high_detail\": " << (mHighDetail ? "true" : "false") << ",\n";
     metadata << "  \"max_ortho_size\": " << mMaxOrthoSize << ",\n";
+    metadata << "  \"gv_dilation_radius\": " << mGVDilationRadius << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
