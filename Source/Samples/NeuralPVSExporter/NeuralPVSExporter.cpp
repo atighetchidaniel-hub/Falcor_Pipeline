@@ -2143,7 +2143,49 @@ void NeuralPVSExporter::exportOneSample(
     }
     else
     {
-        updateSceneForCamera();
+        // World AABB mode: rasterize from 3 axis-aligned orthographic views so that
+        // all geometry (floors/roads, walls, ceilings) generates fragments regardless
+        // of its surface orientation. A single perspective shot leaves horizontal
+        // surfaces nearly edge-on and produces a very sparse GV.
+        const AABB& bounds = mpScene->getSceneBounds();
+        const float3 bCenter = bounds.center();
+        const float3 bExtent = max(bounds.extent(), float3(0.001f));
+        constexpr float kMargin = 1.05f;
+
+        // Top-down: captures horizontal surfaces (roads, floors, rooftops).
+        setOrthographicCamera(
+            bCenter + float3(0.f, bExtent.y * kMargin, 0.f),
+            float3(0.f, -1.f, 0.f),
+            float3(0.f, 0.f, 1.f),
+            bExtent.x * kMargin,
+            bExtent.z * kMargin,
+            0.001f,
+            bExtent.y * 2.f * kMargin
+        );
+        renderGVFromCurrentCamera();
+
+        // Front-back: captures walls whose normal faces ±Z.
+        setOrthographicCamera(
+            bCenter + float3(0.f, 0.f, bExtent.z * kMargin),
+            float3(0.f, 0.f, -1.f),
+            float3(0.f, 1.f, 0.f),
+            bExtent.x * kMargin,
+            bExtent.y * kMargin,
+            0.001f,
+            bExtent.z * 2.f * kMargin
+        );
+        renderGVFromCurrentCamera();
+
+        // Side-side: captures walls whose normal faces ±X.
+        setOrthographicCamera(
+            bCenter + float3(bExtent.x * kMargin, 0.f, 0.f),
+            float3(-1.f, 0.f, 0.f),
+            float3(0.f, 1.f, 0.f),
+            bExtent.z * kMargin,
+            bExtent.y * kMargin,
+            0.001f,
+            bExtent.x * 2.f * kMargin
+        );
         renderGVFromCurrentCamera();
     }
 
