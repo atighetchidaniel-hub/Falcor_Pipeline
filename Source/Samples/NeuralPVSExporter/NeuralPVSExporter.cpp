@@ -853,7 +853,6 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
             mPreviewWallClockValid = false;
         }
 
-        applyPreviewSample();
     }
 
     uint32_t enableRenderPVV = 0u;
@@ -888,6 +887,14 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
     if (is_set(updates, IScene::UpdateFlags::RecompileNeeded))
     {
         FALCOR_THROW("Scene update requires shader recompilation. Reload the scene.");
+    }
+
+    // Some scenes (notably BistroExterior.pyscene) animate the selected camera
+    // during scene update. Re-apply the NeuralPVS sample camera after update so
+    // RenderPVV culling and the drawn view always refer to the same sample.
+    if (!mPreviewSamples.empty())
+    {
+        applyPreviewSample();
     }
 
     auto previewRoot = mpPreviewPass->getRootVar();
