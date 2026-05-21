@@ -447,6 +447,26 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 }
                 w.textbox("Dataset path", mRenderDatasetRootText);
                 w.textbox("PVV path", mPredictedPVVRootText);
+
+                Gui::DropdownList volumeSources = {
+                    {0, "Predicted PVV (neural net output)"},
+                    {1, "Dataset PVV (ground truth)"},
+                    {2, "Dataset GV"},
+                };
+                if (w.dropdown("Render volume source", volumeSources, mRenderVolumeSource))
+                {
+                    mRenderLoadedSampleIndex = 0xffffffffu;
+                    mRenderLoadedVolumeSource = 0xffffffffu;
+                }
+
+                const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
+                w.var("Render sample index", mRenderSampleIndex, 0u, maxRenderIndex);
+
+                if (w.button("Load render volume"))
+                {
+                    ensureRenderVolumeLoaded(true);
+                }
+
                 w.checkbox("Export frames", mRenderExportFrames);
                 Gui::DropdownList frameExportModes = {
                     {0, "Image sequence"},
