@@ -144,9 +144,9 @@ private:
     uint32_t mSamplingFactor = 2;
     uint32_t mExportIndex = 0;
 
-    std::string mScenePathText = "media/RobolabUSD/Robolab.usda";
+    std::string mScenePathText = "C:/dev/Falcor/media/Bistro/ORCA/Bistro_v5_2/BistroExterior.pyscene";
     std::string mOutputRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets";
-    std::string mDatasetName = "falcor_robolab_usd_frustum_128";
+    std::string mDatasetName = "falcor_bistro_exterior_builtin_256";
 
     std::filesystem::path mScenePath = mScenePathText;
     std::filesystem::path mOutputRoot = mOutputRootText;
@@ -154,13 +154,13 @@ private:
     uint32_t mSamplesPerAxis = 5;
     float mVolumeExtentScale = 0.65f;
     float mSampleStepScale = 0.05f;
-    uint32_t mExportMode = 2; // 0 = Generate GV, 1 = Generate PVV, 2 = Generate GV + PVV, 3 = Render PVV
+    uint32_t mExportMode = 3; // 0 = Generate GV, 1 = Generate PVV, 2 = Generate GV + PVV, 3 = Render PVV
     bool mWriteDebugProjections = false;
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
-    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/robolab_animated_camera_path_usd_zflip.csv";
+    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
     std::string mCapturedPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
-    uint32_t mCapturedPathOutputSamples = 128;
+    uint32_t mCapturedPathOutputSamples = 256;
     uint32_t mVisibilityMode = 0; // 0 = view cell rays, 1 = Unity viewcell sample cameras
     float mCameraAspectRatio = 1.777778f;
     uint32_t mVolumeMappingMode = 0; // 0 = world AABB, 1 = Unity view-cell projection
@@ -184,8 +184,8 @@ private:
     std::vector<ExportSample> mPreviewSamples;
     std::vector<ExportSample> mCapturedPathSamples;
 
-    std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_robolab_usd_frustum_128";
-    std::string mPredictedPVVRootText;
+    std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256";
+    std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256/predicted_pvv";
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
     uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = box, 3 = conservative trilinear
