@@ -1501,7 +1501,6 @@ void NeuralPVSExporter::startSelectedMode()
         {
             useGeneratedRenderPaths();
         }
-        mRenderVolumeSource = 0;
         mRenderUseSampleCamera = true;
         mRenderKeepOutsidePVVInView = true;
         mRenderPVVActive = false;
@@ -2097,6 +2096,7 @@ void NeuralPVSExporter::exportOneSample(
     auto renderGVFromCurrentCamera = [&]()
     {
         mpGVPass->getState()->setFbo(mpGVFbo);
+        pRenderContext->clearFbo(mpGVFbo.get(), float4(0, 0, 0, 0), 1.0f, 0, FboAttachmentType::All);
         mpScene->rasterize(
             pRenderContext,
             mpGVPass->getState().get(),
