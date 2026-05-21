@@ -83,7 +83,10 @@ bool worldToVolume01(float3 worldPos, out float3 p)
     float3 rel = worldPos - gViewCellPosition;
     float depth = dot(rel, normalize(gViewCellForward));
     if (depth < gViewCellNearPlane || depth > gViewCellFarPlane)
+    {
+        p = float3(0.0f);
         return false;
+    }
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);

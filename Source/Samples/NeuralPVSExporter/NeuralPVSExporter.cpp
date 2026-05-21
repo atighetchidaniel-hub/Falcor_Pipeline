@@ -452,6 +452,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                     {0, "Predicted PVV (neural net output)"},
                     {1, "Dataset PVV (ground truth)"},
                     {2, "Dataset GV"},
+                    {3, "Scene only (no PVV culling)"},
                 };
                 if (w.dropdown("Render volume source", volumeSources, mRenderVolumeSource))
                 {
@@ -464,7 +465,19 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
                 if (w.button("Load render volume"))
                 {
-                    ensureRenderVolumeLoaded(true);
+                    if (mRenderVolumeSource == 3u)
+                    {
+                        mpRenderVolume = nullptr;
+                        mRenderLoadedSampleIndex = 0xffffffffu;
+                        mRenderLoadedVolumeSource = 0xffffffffu;
+                        mRenderLoadedVolumePath.clear();
+                        mRenderStatus = "Scene-only source selected; no PVV/GV volume is loaded.";
+                        mLastExportStatus = mRenderStatus;
+                    }
+                    else
+                    {
+                        ensureRenderVolumeLoaded(true);
+                    }
                 }
 
                 w.checkbox("Export frames", mRenderExportFrames);
@@ -866,9 +879,6 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
             mRenderSampleIndex = std::min(mPreviewSampleIndex, uint32_t(mRenderSamples.size() - 1u));
         }
 
-        if (!ensureRenderVolumeLoaded(false))
-            return;
-
         mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
         const ExportSample& renderSample = mRenderSamples[mRenderSampleIndex];
         renderVolumeMin = renderSample.center - mRenderVolumeExtent * 0.5f;
@@ -880,7 +890,14 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
             mRenderUnityFovExpansionDegrees
         );
         renderVolumeMappingMode = mRenderVolumeMappingMode == 1u && renderSample.hasCamera ? 1u : 0u;
-        enableRenderPVV = mpRenderVolume ? 1u : 0u;
+
+        if (mRenderVolumeSource != 3u)
+        {
+            if (!ensureRenderVolumeLoaded(false))
+                return;
+
+            enableRenderPVV = mpRenderVolume ? 1u : 0u;
+        }
     }
 
     IScene::UpdateFlags updates = mpScene->update(pRenderContext, getGlobalClock().getTime());
@@ -1596,7 +1613,6 @@ void NeuralPVSExporter::startRenderPVVMode()
     if (mRenderDatasetRootText.empty())
         useGeneratedRenderPaths();
 
-    mRenderVolumeSource = 0u;
     loadRenderMetadata();
 
     mRenderPVVCullScene = true;
@@ -1628,14 +1644,26 @@ void NeuralPVSExporter::startRenderPVVMode()
     }
 
     applyPreviewSample();
-    if (!ensureRenderVolumeLoaded(true))
+    if (mRenderVolumeSource == 3u)
+    {
+        mpRenderVolume = nullptr;
+        mRenderLoadedSampleIndex = 0xffffffffu;
+        mRenderLoadedVolumeSource = 0xffffffffu;
+        mRenderLoadedVolumePath.clear();
+    }
+    else if (!ensureRenderVolumeLoaded(true))
     {
         mRenderPVVActive = false;
         return;
     }
 
+    const std::string sourceName =
+        mRenderVolumeSource == 3u ? "scene only" :
+        mRenderVolumeSource == 2u ? "dataset GV" :
+        mRenderVolumeSource == 1u ? "dataset PVV" : "predicted PVV";
+
     mRenderStatus =
-        "RenderPVV mode running through predicted PVV samples" +
+        "RenderPVV mode running through " + sourceName + " samples" +
         std::string(
             mRenderExportFrames
                 ? (mRenderFrameExportMode == 0u ? ". Saving frames to " + getRenderFrameOutputPath().string()
@@ -1674,8 +1702,13 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
         return std::filesystem::exists(pvvPath) ? pvvPath : std::filesystem::path();
     }
 
-    const std::filesystem::path gvPath = mRenderDatasetRoot / "gv" / fourDigitName(sampleIndex, "_gv.bin.gz");
-    return std::filesystem::exists(gvPath) ? gvPath : std::filesystem::path();
+    if (mRenderVolumeSource == 2u)
+    {
+        const std::filesystem::path gvPath = mRenderDatasetRoot / "gv" / fourDigitName(sampleIndex, "_gv.bin.gz");
+        return std::filesystem::exists(gvPath) ? gvPath : std::filesystem::path();
+    }
+
+    return {};
 }
 
 std::filesystem::path NeuralPVSExporter::getRenderPredictedPVVRoot() const
