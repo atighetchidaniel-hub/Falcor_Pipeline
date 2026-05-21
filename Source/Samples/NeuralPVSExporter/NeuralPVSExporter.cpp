@@ -2064,28 +2064,41 @@ void NeuralPVSExporter::exportOneSample(
 
     auto setPerspectiveCamera = [&](float3 position, float3 forward, float3 up, float fovYRadians, float nearPlane, float farPlane)
     {
-        mpCamera->togglePersistentProjectionMatrix(false);
-        mpCamera->setPosition(position);
-        mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
-        mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
-        mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
-        mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
-        mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
+        auto applyCamera = [&]()
+        {
+            mpCamera->togglePersistentProjectionMatrix(false);
+            mpCamera->setPosition(position);
+            mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
+            mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
+            mpCamera->setFocalLength(fovYToFocalLength(fovYRadians, Camera::kDefaultFrameHeight));
+            mpCamera->setAspectRatio(std::max(0.1f, mCameraAspectRatio));
+            mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
+        };
+
+        applyCamera();
         updateSceneForCamera();
+        applyCamera();
     };
 
     auto setOrthographicCamera = [&](float3 position, float3 forward, float3 up, float width, float height, float nearPlane, float farPlane)
     {
         width = std::max(0.001f, width);
         height = std::max(0.001f, height);
-        mpCamera->togglePersistentProjectionMatrix(false);
-        mpCamera->setPosition(position);
-        mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
-        mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
-        mpCamera->setAspectRatio(width / height);
-        mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
-        mpCamera->setProjectionMatrix(math::ortho(-0.5f * width, 0.5f * width, -0.5f * height, 0.5f * height, nearPlane, farPlane));
+
+        auto applyCamera = [&]()
+        {
+            mpCamera->togglePersistentProjectionMatrix(false);
+            mpCamera->setPosition(position);
+            mpCamera->setTarget(position + normalizedOrDefault(forward, float3(0.f, 0.f, -1.f)));
+            mpCamera->setUpVector(normalizedOrDefault(up, float3(0.f, 1.f, 0.f)));
+            mpCamera->setAspectRatio(width / height);
+            mpCamera->setDepthRange(std::max(0.001f, nearPlane), std::max(nearPlane + 0.001f, farPlane));
+            mpCamera->setProjectionMatrix(math::ortho(-0.5f * width, 0.5f * width, -0.5f * height, 0.5f * height, nearPlane, farPlane));
+        };
+
+        applyCamera();
         updateSceneForCamera();
+        applyCamera();
     };
 
     auto restoreCamera = [&]()
