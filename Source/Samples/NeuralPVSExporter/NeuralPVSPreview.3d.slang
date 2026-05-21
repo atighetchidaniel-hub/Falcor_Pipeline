@@ -139,6 +139,23 @@ bool isVisibleInPVV(float3 worldPos)
         return false;
     }
 
+    if (gPVVFilter == 4u)
+    {
+        int3 center = int3(int(x), int(y), int(z));
+        for (int dz = -2; dz <= 2; ++dz)
+        {
+            for (int dy = -2; dy <= 2; ++dy)
+            {
+                for (int dx = -2; dx <= 2; ++dx)
+                {
+                    if (loadPVVBitClamped(center + int3(dx, dy, dz)))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
     int3 baseVoxel = int3(floor(gridPos - 0.5f));
     for (int dz = 0; dz <= 1; ++dz)
     {

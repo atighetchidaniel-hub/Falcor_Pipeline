@@ -516,8 +516,9 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
             Gui::DropdownList pvvFilters = {
                 {1, "None (exact)"},
-                {2, "Box (debug/dilated)"},
+                {2, "Box 3x3x3 (surface tolerant)"},
                 {3, "Trilinear (debug)"},
+                {4, "Wide box 5x5x5 (road test)"},
             };
             w.dropdown("RenderPVV filter", pvvFilters, mRenderPVVFilter);
             w.checkbox("Write debug projections", mWriteDebugProjections);
