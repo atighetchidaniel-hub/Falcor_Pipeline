@@ -6,6 +6,7 @@
 #include "Core/Pass/ComputePass.h"
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -178,6 +179,8 @@ private:
     float mPreviewFps = 12.f;
     uint32_t mPreviewSampleIndex = 0;
     double mPreviewAccumulator = 0.0;
+    bool mPreviewWallClockValid = false;
+    std::chrono::steady_clock::time_point mPreviewWallClockLast;
     std::vector<ExportSample> mPreviewSamples;
     std::vector<ExportSample> mCapturedPathSamples;
 

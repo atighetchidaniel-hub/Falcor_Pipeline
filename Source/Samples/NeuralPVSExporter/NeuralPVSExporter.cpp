@@ -793,7 +793,19 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
             mRenderPVVActive && mRenderPVVCullScene && mRenderExportFrames && mRenderLastCapturedSampleIndex == 0xffffffffu;
         if (mPreviewPlayback && !holdFirstRenderPVVFrame)
         {
-            mPreviewAccumulator += getGlobalClock().getDelta();
+            const auto now = std::chrono::steady_clock::now();
+            if (!mPreviewWallClockValid)
+            {
+                mPreviewWallClockLast = now;
+                mPreviewWallClockValid = true;
+            }
+
+            const double wallDelta = std::chrono::duration<double>(now - mPreviewWallClockLast).count();
+            mPreviewWallClockLast = now;
+
+            // Use wall-clock playback so RenderPVV follows exported camera samples even
+            // when Falcor's scene/global animation clock is paused or controlled by a scene.
+            mPreviewAccumulator += std::clamp(wallDelta, 0.0, 0.25);
             const double frameSeconds = 1.0 / std::max(0.5f, mPreviewFps);
             while (mPreviewAccumulator >= frameSeconds)
             {
@@ -815,6 +827,10 @@ void NeuralPVSExporter::renderPreview(RenderContext* pRenderContext, const ref<F
                 }
                 mPreviewAccumulator -= frameSeconds;
             }
+        }
+        else if (!mPreviewPlayback)
+        {
+            mPreviewWallClockValid = false;
         }
 
         applyPreviewSample();
@@ -921,6 +937,7 @@ void NeuralPVSExporter::loadPreviewPath()
     mPreviewSamples = loadPathSamples(std::filesystem::path(mPathCsvText));
     mPreviewSampleIndex = 0;
     mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
     applyPreviewSample();
     mLastExportStatus = "Loaded " + std::to_string(mPreviewSamples.size()) + " preview path samples.";
 }
@@ -1024,6 +1041,7 @@ void NeuralPVSExporter::useCapturedPathForExport()
         mPreviewSamples = loadPathSamples(std::filesystem::path(mPathCsvText));
         mPreviewSampleIndex = 0;
         mPreviewAccumulator = 0.0;
+        mPreviewWallClockValid = false;
         applyPreviewSample();
         mLastExportStatus = "Using captured path with " + std::to_string(mPreviewSamples.size()) + " samples.";
     }
@@ -1294,6 +1312,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
         {
             mPreviewPlayback = false;
             mPreviewAccumulator = 0.0;
+            mPreviewWallClockValid = false;
             mRenderPVVActive = false;
             mRenderPVVCullScene = false;
             mRenderPVVFinished = true;
@@ -1309,6 +1328,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mPreviewWallClockValid = false;
         mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
@@ -1346,6 +1366,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mPreviewWallClockValid = false;
         mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
@@ -1359,6 +1380,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     {
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mPreviewWallClockValid = false;
         mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
@@ -1471,6 +1493,7 @@ void NeuralPVSExporter::startSelectedMode()
         mProgressiveExportActive = false;
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
+        mPreviewWallClockValid = false;
         mRenderPVVActive = false;
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
@@ -1492,6 +1515,7 @@ void NeuralPVSExporter::stopCurrentMode()
     mProgressiveExportActive = false;
     mPreviewPlayback = false;
     mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
     mRenderPVVActive = false;
     mRenderPVVFinished = true;
     mRenderPVVCullScene = false;
@@ -1542,6 +1566,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     mPreviewSamples = mRenderSamples;
     mPreviewSampleIndex = 0;
     mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
     mPreviewPlayback = true;
 
     if (mRenderExportFrames)
@@ -1667,6 +1692,7 @@ void NeuralPVSExporter::finishRenderPVVMode()
     mRenderPVVFinished = true;
     mPreviewPlayback = false;
     mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
     mRenderPVVActive = false;
     mRenderPVVCullScene = false;
 
@@ -1851,6 +1877,7 @@ void NeuralPVSExporter::startProgressiveExport()
     mPreviewSampleIndex = 0;
     mPreviewPlayback = false;
     mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
     applyPreviewSample();
 
     mLastExportStatus = "Started preview export of " + std::to_string(mProgressiveExportSamples.size()) + " samples.";
