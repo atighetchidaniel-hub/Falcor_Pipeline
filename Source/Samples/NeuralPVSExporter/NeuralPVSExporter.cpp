@@ -407,25 +407,27 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 w.var("Sample step scale", mSampleStepScale, 0.001f, 0.5f, 0.001f);
             }
 
-            mVisibilityMode = 0;
-            mVolumeMappingMode = 0;
-            w.text("Visibility mode: Ray-tested view cell");
-            w.text("Volume mapping: World AABB volume");
+            Gui::DropdownList pipelinePresets = {
+                {0, "Falcor native ray/world (main)"},
+                {1, "Unity-style depth cameras/projection (experimental)"},
+            };
+            w.dropdown("Pipeline preset", pipelinePresets, mPipelinePreset);
 
-            // Unity projection/frustum mode is intentionally kept in the codebase
-            // for future comparison, but hidden from the UI while the thesis
-            // pipeline uses the stable Falcor-native ray/world mode.
-            // Gui::DropdownList visibilityModes = {
-            //     {0, "Ray-tested view cell"},
-            //     {1, "Unity path camera frustum"},
-            // };
-            // w.dropdown("Visibility mode", visibilityModes, mVisibilityMode);
-            //
-            // Gui::DropdownList mappingModes = {
-            //     {0, "World AABB volume"},
-            //     {1, "Unity projection volume"},
-            // };
-            // w.dropdown("Volume mapping", mappingModes, mVolumeMappingMode);
+            const bool unityStyleDepthPVV = mPipelinePreset == 1u;
+            mVisibilityMode = unityStyleDepthPVV ? 1u : 0u;
+            mVolumeMappingMode = unityStyleDepthPVV ? 1u : 0u;
+
+            if (unityStyleDepthPVV)
+            {
+                w.text("Visibility mode: Unity depth sample cameras");
+                w.text("Volume mapping: Unity projection volume");
+                w.text("Export dilation: off for Unity-style parity");
+            }
+            else
+            {
+                w.text("Visibility mode: Ray-tested view cell");
+                w.text("Volume mapping: World AABB volume");
+            }
 
             w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
             w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
@@ -435,12 +437,17 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.var("PVV sample steps", mPVVSampleSteps, 1u, 20u);
             w.checkbox("Linear Z", mLinearZ);
             w.var("Log depth scale", mLogDepthScale, 0.0001f, 1.0f, 0.0001f);
-            // Unity/FOV expansion is only used by the hidden Unity projection mode.
-            // w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
+            if (unityStyleDepthPVV)
+            {
+                w.var("Unity FOV expansion", mUnityFovExpansionDegrees, 0.0f, 90.0f, 0.5f);
+            }
             w.checkbox("High-detail GV cameras", mHighDetail);
             w.var("Max ortho size", mMaxOrthoSize, 1.0f, 500.0f, 1.0f);
-            w.var("GV dilation radius", mGVDilationRadius, 0u, 1u);
-            w.var("PVV dilation radius", mPVVDilationRadius, 0u, 1u);
+            if (!unityStyleDepthPVV)
+            {
+                w.var("GV dilation radius", mGVDilationRadius, 0u, 1u);
+                w.var("PVV dilation radius", mPVVDilationRadius, 0u, 1u);
+            }
             if (mExportMode == 3)
             {
                 if (w.button("Use generated dataset paths"))
@@ -1508,15 +1515,9 @@ void NeuralPVSExporter::startSelectedMode()
 {
     try
     {
-        if (mSamplingMode != 1)
-        {
-            mVisibilityMode = 0;
-            mVolumeMappingMode = 0;
-        }
-        else if (mVisibilityMode == 1)
-        {
-            mVolumeMappingMode = 1;
-        }
+        const bool unityStyleDepthPVV = mPipelinePreset == 1u;
+        mVisibilityMode = unityStyleDepthPVV ? 1u : 0u;
+        mVolumeMappingMode = unityStyleDepthPVV ? 1u : 0u;
 
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
@@ -2049,8 +2050,11 @@ void NeuralPVSExporter::exportOneSample(
 {
     const float3 viewCellCenter = sample.center;
     const float3 volumeMin = viewCellCenter - volumeExtent * 0.5f;
+    const bool unityStyleDepthPVV = mPipelinePreset == 1u;
     const bool useCameraFrustum = mVisibilityMode == 1;
     const bool useProjectionVolume = mVolumeMappingMode == 1 && sample.hasCamera;
+    const uint32_t effectiveGVDilationRadius = unityStyleDepthPVV ? 0u : mGVDilationRadius;
+    const uint32_t effectivePVVDilationRadius = unityStyleDepthPVV ? 0u : mPVVDilationRadius;
     const VolumeProjectionParams volumeProjection =
         makeVolumeProjection(sample, viewCellRadius, mViewCellNearPlane, mViewCellFarPlane, mUnityFovExpansionDegrees);
 
@@ -2075,7 +2079,7 @@ void NeuralPVSExporter::exportOneSample(
     gvRoot["ExporterCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
     gvRoot["ExporterCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
     gvRoot["ExporterCB"]["gLogDepthScale"] = mLogDepthScale;
-    gvRoot["ExporterCB"]["gGVDilationRadius"] = mGVDilationRadius;
+    gvRoot["ExporterCB"]["gGVDilationRadius"] = effectiveGVDilationRadius;
 
     if (!mpCamera)
     {
@@ -2311,7 +2315,7 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
         pvvRoot["PVVCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
         pvvRoot["PVVCB"]["gLogDepthScale"] = mLogDepthScale;
-        pvvRoot["PVVCB"]["gPVVDilationRadius"] = mPVVDilationRadius;
+        pvvRoot["PVVCB"]["gPVVDilationRadius"] = effectivePVVDilationRadius;
 
         const uint32_t depthWidth = mpPVVDepthFbo->getWidth();
         const uint32_t depthHeight = mpPVVDepthFbo->getHeight();
@@ -2376,7 +2380,7 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVRayCB"]["gRayViewCellUp"] = volumeProjection.up;
         pvvRoot["PVVRayCB"]["gRayLinearZ"] = mLinearZ ? 1u : 0u;
         pvvRoot["PVVRayCB"]["gRayLogDepthScale"] = mLogDepthScale;
-        pvvRoot["PVVRayCB"]["gRayPVVDilationRadius"] = mPVVDilationRadius;
+        pvvRoot["PVVRayCB"]["gRayPVVDilationRadius"] = effectivePVVDilationRadius;
 
         mpPVVRayPass->execute(pRenderContext, mVolumeSize / 32u, mVolumeSize, mVolumeDepth);
     }
@@ -2426,6 +2430,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "{\n";
     metadata << "  \"dataset_name\": \"" << mDatasetName << "\",\n";
     metadata << "  \"scene_path\": \"" << mScenePath.generic_string() << "\",\n";
+    metadata << "  \"pipeline_preset\": \"" << (mPipelinePreset == 1u ? "unity_depth_sample_cameras" : "falcor_ray_world") << "\",\n";
     metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
     metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "unity_view_cell" : "view_cell") << "\",\n";
     metadata << "  \"volume_mapping\": \"" << (mVolumeMappingMode == 1 ? "unity_projection" : "world_aabb") << "\",\n";
@@ -2441,8 +2446,8 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"unity_fov_expansion_degrees\": " << mUnityFovExpansionDegrees << ",\n";
     metadata << "  \"high_detail\": " << (mHighDetail ? "true" : "false") << ",\n";
     metadata << "  \"max_ortho_size\": " << mMaxOrthoSize << ",\n";
-    metadata << "  \"gv_dilation_radius\": " << mGVDilationRadius << ",\n";
-    metadata << "  \"pvv_dilation_radius\": " << mPVVDilationRadius << ",\n";
+    metadata << "  \"gv_dilation_radius\": " << (mPipelinePreset == 1u ? 0u : mGVDilationRadius) << ",\n";
+    metadata << "  \"pvv_dilation_radius\": " << (mPipelinePreset == 1u ? 0u : mPVVDilationRadius) << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";

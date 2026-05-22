@@ -161,6 +161,7 @@ private:
     std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
     std::string mCapturedPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
     uint32_t mCapturedPathOutputSamples = 256;
+    uint32_t mPipelinePreset = 0; // 0 = Falcor native ray/world, 1 = Unity-style depth sample cameras.
     uint32_t mVisibilityMode = 0; // 0 = view cell rays, 1 = Unity viewcell sample cameras
     float mCameraAspectRatio = 1.777778f;
     uint32_t mVolumeMappingMode = 0; // 0 = world AABB, 1 = Unity view-cell projection
@@ -190,7 +191,7 @@ private:
     std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256/predicted_pvv";
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV, 3 = scene only
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
-    uint32_t mRenderPVVFilter = 2; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = radius-2 cross
+    uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = radius-2 cross
     uint32_t mRenderSampleIndex = 0;
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
