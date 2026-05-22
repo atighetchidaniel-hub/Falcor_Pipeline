@@ -73,6 +73,7 @@ private:
     void stopCurrentMode();
     void startRenderPVVMode();
     void useGeneratedRenderPaths();
+    uint32_t getRenderVolumeSampleIndex() const;
     std::filesystem::path resolveRenderVolumePath() const;
     std::filesystem::path getRenderPredictedPVVRoot() const;
     std::filesystem::path getRenderFrameOutputPath() const;
@@ -193,6 +194,7 @@ private:
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
     uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = radius-2 cross
     uint32_t mRenderSampleIndex = 0;
+    uint32_t mRenderVolumeSampleOffsetMode = 2; // 0=-2, 1=-1, 2=0, 3=+1, 4=+2
     uint32_t mRenderVolumeSize = 256;
     uint32_t mRenderVolumeDepth = 256;
     uint32_t mRenderVolumeMappingMode = 0; // Read from metadata. Missing metadata means legacy world AABB.

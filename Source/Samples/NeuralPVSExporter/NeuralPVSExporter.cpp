@@ -261,6 +261,18 @@ namespace
         return quoted;
     }
 
+    int32_t renderVolumeSampleOffset(uint32_t mode)
+    {
+        switch (mode)
+        {
+        case 0: return -2;
+        case 1: return -1;
+        case 3: return 1;
+        case 4: return 2;
+        default: return 0;
+        }
+    }
+
     std::filesystem::path findFFmpegExecutable()
     {
 #ifdef _WIN32
@@ -471,6 +483,18 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
                 const uint32_t maxRenderIndex = mRenderSamples.empty() ? 0u : uint32_t(mRenderSamples.size() - 1u);
                 w.var("Render sample index", mRenderSampleIndex, 0u, maxRenderIndex);
+                Gui::DropdownList renderVolumeOffsets = {
+                    {0, "PVV sample -2"},
+                    {1, "PVV sample -1"},
+                    {2, "PVV sample 0 (matched)"},
+                    {3, "PVV sample +1"},
+                    {4, "PVV sample +2"},
+                };
+                if (w.dropdown("PVV sample offset", renderVolumeOffsets, mRenderVolumeSampleOffsetMode))
+                {
+                    mRenderLoadedSampleIndex = 0xffffffffu;
+                    mRenderLoadedVolumeSource = 0xffffffffu;
+                }
 
                 if (w.button("Load render volume"))
                 {
@@ -1398,6 +1422,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     }
 
     mRenderSampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    const uint32_t volumeSampleIndex = getRenderVolumeSampleIndex();
     const std::filesystem::path volumePath = resolveRenderVolumePath();
     if (volumePath.empty())
     {
@@ -1408,25 +1433,24 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
         mRenderPVVCullScene = false;
         mRenderPVVFinished = true;
 
-        const uint32_t sampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
         if (mRenderVolumeSource == 0u)
         {
             const std::filesystem::path predictedRoot = getRenderPredictedPVVRoot();
             mRenderStatus =
-                "Can't find predicted PVV sample " + std::to_string(sampleIndex) +
-                ". Tried " + (predictedRoot / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz")).string() +
-                " and " + (predictedRoot / fourDigitName(sampleIndex, "_predicted_pvv.bin.gz")).string();
+                "Can't find predicted PVV sample " + std::to_string(volumeSampleIndex) +
+                ". Tried " + (predictedRoot / (std::to_string(volumeSampleIndex) + "_predicted_pvv.bin.gz")).string() +
+                " and " + (predictedRoot / fourDigitName(volumeSampleIndex, "_predicted_pvv.bin.gz")).string();
         }
         else
         {
             mRenderStatus =
-                "Can't find render volume sample " + std::to_string(sampleIndex) + " under " + mRenderDatasetRoot.string();
+                "Can't find render volume sample " + std::to_string(volumeSampleIndex) + " under " + mRenderDatasetRoot.string();
         }
         mLastExportStatus = mRenderStatus;
         return false;
     }
 
-    if (!forceReload && mpRenderVolume && mRenderLoadedSampleIndex == mRenderSampleIndex &&
+    if (!forceReload && mpRenderVolume && mRenderLoadedSampleIndex == volumeSampleIndex &&
         mRenderLoadedVolumeSource == mRenderVolumeSource && mRenderLoadedVolumePath == volumePath)
     {
         return true;
@@ -1476,7 +1500,7 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
         ResourceBindFlags::ShaderResource
     );
 
-    mRenderLoadedSampleIndex = mRenderSampleIndex;
+    mRenderLoadedSampleIndex = volumeSampleIndex;
     mRenderLoadedVolumeSource = mRenderVolumeSource;
     mRenderLoadedVolumePath = volumePath;
     mRenderVolumeKind = mRenderVolumeSource == 2u ? 0u : 1u;
@@ -1491,7 +1515,9 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
     mRenderScenePreview = true;
     mRenderStatus =
         "Loaded " + std::string(mRenderVolumeSource == 2u ? "GV" : (mRenderVolumeSource == 1u ? "PVV" : "predicted PVV")) +
-        " sample " + std::to_string(mRenderSampleIndex) + " from " + volumePath.string();
+        " sample " + std::to_string(volumeSampleIndex) +
+        (volumeSampleIndex == mRenderSampleIndex ? "" : " for camera sample " + std::to_string(mRenderSampleIndex)) +
+        " from " + volumePath.string();
     mLastExportStatus = mRenderStatus;
     return true;
 }
@@ -1509,6 +1535,17 @@ void NeuralPVSExporter::useGeneratedRenderPaths()
     const std::filesystem::path datasetRoot = std::filesystem::path(mOutputRootText) / mDatasetName;
     mRenderDatasetRootText = datasetRoot.string();
     mPredictedPVVRootText = (datasetRoot / "predicted_pvv").string();
+}
+
+uint32_t NeuralPVSExporter::getRenderVolumeSampleIndex() const
+{
+    if (mRenderSamples.empty())
+        return 0u;
+
+    const int32_t maxIndex = int32_t(mRenderSamples.size() - 1u);
+    const int32_t cameraIndex = int32_t(std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u)));
+    const int32_t volumeIndex = std::clamp(cameraIndex + renderVolumeSampleOffset(mRenderVolumeSampleOffsetMode), 0, maxIndex);
+    return uint32_t(volumeIndex);
 }
 
 void NeuralPVSExporter::startSelectedMode()
@@ -1684,7 +1721,7 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
         return {};
     }
 
-    const uint32_t sampleIndex = std::min(mRenderSampleIndex, uint32_t(mRenderSamples.size() - 1u));
+    const uint32_t sampleIndex = getRenderVolumeSampleIndex();
 
     if (mRenderVolumeSource == 0u)
     {
