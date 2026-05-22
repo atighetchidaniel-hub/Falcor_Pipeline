@@ -2805,6 +2805,7 @@ int runMain(int argc, char** argv)
     SampleAppConfig config;
     config.windowDesc.title = "NeuralPVS Exporter";
     config.windowDesc.resizableWindow = true;
+    config.pauseTime = true;
 
     NeuralPVSExporter app(config);
     return app.run();

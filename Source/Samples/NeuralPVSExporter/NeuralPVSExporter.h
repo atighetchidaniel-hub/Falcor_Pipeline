@@ -145,8 +145,8 @@ private:
     uint32_t mSamplingFactor = 2;
     uint32_t mExportIndex = 0;
 
-    std::string mScenePathText = "C:/dev/Falcor/media/Bistro/ORCA/Bistro_v5_2/BistroExterior.pyscene";
-    std::string mOutputRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets";
+    std::string mScenePathText = "T:/Falcor/media/Bistro/ORCA/Bistro_v5_2/BistroExterior.pyscene";
+    std::string mOutputRootText = "T:/Falcor/neuralpvs_export_test/datasets";
     std::string mDatasetName = "falcor_bistro_exterior_builtin_256";
 
     std::filesystem::path mScenePath = mScenePathText;
@@ -159,8 +159,8 @@ private:
     bool mWriteDebugProjections = false;
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
-    std::string mPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
-    std::string mCapturedPathCsvText = "C:/dev/Falcor/neuralpvs_paths/arcade_captured_path.csv";
+    std::string mPathCsvText = "T:/Falcor/neuralpvs_paths/arcade_captured_path.csv";
+    std::string mCapturedPathCsvText = "T:/Falcor/neuralpvs_paths/arcade_captured_path.csv";
     uint32_t mCapturedPathOutputSamples = 256;
     uint32_t mPipelinePreset = 0; // 0 = Falcor native ray/world, 1 = Unity-style depth sample cameras.
     uint32_t mVisibilityMode = 0; // 0 = view cell rays, 1 = Unity viewcell sample cameras
@@ -188,8 +188,8 @@ private:
     std::vector<ExportSample> mPreviewSamples;
     std::vector<ExportSample> mCapturedPathSamples;
 
-    std::string mRenderDatasetRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256";
-    std::string mPredictedPVVRootText = "C:/dev/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256/predicted_pvv";
+    std::string mRenderDatasetRootText = "T:/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256";
+    std::string mPredictedPVVRootText = "T:/Falcor/neuralpvs_export_test/datasets/falcor_bistro_exterior_builtin_256/predicted_pvv";
     uint32_t mRenderVolumeSource = 0; // 0 = predicted PVV, 1 = dataset PVV, 2 = dataset GV, 3 = scene only
     uint32_t mRenderVolumeKind = 1; // 0 = GV, 1 = PVV, used by debug overlay coloring
     uint32_t mRenderPVVFilter = 1; // 1 = none/exact, 2 = 3x3x3 box, 3 = trilinear, 4 = radius-2 cross
