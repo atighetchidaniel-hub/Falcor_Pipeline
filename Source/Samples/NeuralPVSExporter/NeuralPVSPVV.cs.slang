@@ -22,7 +22,8 @@ cbuffer PVVCB
     float3 gViewCellUp;
     float gTanHalfFovY;
     float gLogDepthScale;
-    uint3 gPadding0;
+    uint gPVVDilationRadius;
+    uint2 gPadding0;
 };
 
 bool worldToVolume01(float3 worldPos, out float3 p)
@@ -88,14 +89,34 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    uint x = uint(trunc(volXf));
-    uint y = uint(trunc(volYf));
-    uint z = uint(trunc(volZf));
-    uint wordX = x / 32u;
-    uint bitInWord = x % 32u;
-    uint bitMask = 1u << (31u - bitInWord);
+    int x = int(trunc(volXf));
+    int y = int(trunc(volYf));
+    int z = int(trunc(volZf));
+    int radius = int(min(gPVVDilationRadius, 1u));
 
-    InterlockedOr(gPVVVolume[int3(wordX, y, z)], bitMask);
+    for (int dz = -radius; dz <= radius; ++dz)
+    {
+        for (int dy = -radius; dy <= radius; ++dy)
+        {
+            for (int dx = -radius; dx <= radius; ++dx)
+            {
+                int vx = x + dx;
+                int vy = y + dy;
+                int vz = z + dz;
+                if (vx < 0 || vy < 0 || vz < 0 ||
+                    vx >= int(gVolumeSize) || vy >= int(gVolumeSize) || vz >= int(gVolumeDepth))
+                {
+                    continue;
+                }
+
+                uint wordX = uint(vx) / 32u;
+                uint bitInWord = uint(vx) % 32u;
+                uint bitMask = 1u << (31u - bitInWord);
+
+                InterlockedOr(gPVVVolume[int3(int(wordX), vy, vz)], bitMask);
+            }
+        }
+    }
 }
 
 Texture3D<uint> gRayGeometryVolume;
@@ -128,7 +149,8 @@ cbuffer PVVRayCB
     float3 gRayViewCellUp;
     uint gRayLinearZ;          // 1 = linear (lerp), 0 = log-depth — must match GV generation setting
     float gRayLogDepthScale;   // only used when gRayLinearZ == 0
-    uint3 gRayPadding4;
+    uint gRayPVVDilationRadius;
+    uint2 gRayPadding4;
 };
 
 float3 rayNormalizedOrFallback(float3 v, float3 fallback)
@@ -220,6 +242,41 @@ float3 rayVoxelToWorld(uint x, uint y, uint z)
         rayNormalizedOrFallback(gRayViewCellUp, float3(0.f, 1.f, 0.f)) * (yNdc * depth * gRayTanHalfFovY);
 }
 
+void writeRayPVVBit(uint x, uint y, uint z)
+{
+    if (x >= gRayVolumeSize || y >= gRayVolumeSize || z >= gRayVolumeDepth)
+        return;
+
+    uint wordX = x / 32u;
+    uint bitInWord = x % 32u;
+    uint bitMask = 1u << (31u - bitInWord);
+    InterlockedOr(gRayPVVVolume[int3(int(wordX), int(y), int(z))], bitMask);
+}
+
+void writeRayPVVBitDilated(uint x, uint y, uint z)
+{
+    int radius = int(min(gRayPVVDilationRadius, 1u));
+    for (int dz = -radius; dz <= radius; ++dz)
+    {
+        for (int dy = -radius; dy <= radius; ++dy)
+        {
+            for (int dx = -radius; dx <= radius; ++dx)
+            {
+                int vx = int(x) + dx;
+                int vy = int(y) + dy;
+                int vz = int(z) + dz;
+                if (vx < 0 || vy < 0 || vz < 0 ||
+                    vx >= int(gRayVolumeSize) || vy >= int(gRayVolumeSize) || vz >= int(gRayVolumeDepth))
+                {
+                    continue;
+                }
+
+                writeRayPVVBit(uint(vx), uint(vy), uint(vz));
+            }
+        }
+    }
+}
+
 [numthreads(4, 4, 4)]
 void rayMain(uint3 id : SV_DispatchThreadID)
 {
@@ -259,6 +316,6 @@ void rayMain(uint3 id : SV_DispatchThreadID)
         }
 
         if (visible)
-            InterlockedOr(gRayPVVVolume[int3(id)], bitMask);
+            writeRayPVVBitDilated(x, id.y, id.z);
     }
 }

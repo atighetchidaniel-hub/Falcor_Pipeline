@@ -440,6 +440,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.checkbox("High-detail GV cameras", mHighDetail);
             w.var("Max ortho size", mMaxOrthoSize, 1.0f, 500.0f, 1.0f);
             w.var("GV dilation radius", mGVDilationRadius, 0u, 1u);
+            w.var("PVV dilation radius", mPVVDilationRadius, 0u, 1u);
             if (mExportMode == 3)
             {
                 if (w.button("Use generated dataset paths"))
@@ -2310,6 +2311,7 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVCB"]["gTanHalfFovY"] = volumeProjection.tanHalfFovY;
         pvvRoot["PVVCB"]["gLinearZ"] = mLinearZ ? 1u : 0u;
         pvvRoot["PVVCB"]["gLogDepthScale"] = mLogDepthScale;
+        pvvRoot["PVVCB"]["gPVVDilationRadius"] = mPVVDilationRadius;
 
         const uint32_t depthWidth = mpPVVDepthFbo->getWidth();
         const uint32_t depthHeight = mpPVVDepthFbo->getHeight();
@@ -2374,6 +2376,7 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVRayCB"]["gRayViewCellUp"] = volumeProjection.up;
         pvvRoot["PVVRayCB"]["gRayLinearZ"] = mLinearZ ? 1u : 0u;
         pvvRoot["PVVRayCB"]["gRayLogDepthScale"] = mLogDepthScale;
+        pvvRoot["PVVRayCB"]["gRayPVVDilationRadius"] = mPVVDilationRadius;
 
         mpPVVRayPass->execute(pRenderContext, mVolumeSize / 32u, mVolumeSize, mVolumeDepth);
     }
@@ -2439,6 +2442,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"high_detail\": " << (mHighDetail ? "true" : "false") << ",\n";
     metadata << "  \"max_ortho_size\": " << mMaxOrthoSize << ",\n";
     metadata << "  \"gv_dilation_radius\": " << mGVDilationRadius << ",\n";
+    metadata << "  \"pvv_dilation_radius\": " << mPVVDilationRadius << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
