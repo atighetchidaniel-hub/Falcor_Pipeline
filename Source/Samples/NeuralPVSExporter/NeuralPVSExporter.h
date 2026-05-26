@@ -177,6 +177,7 @@ private:
     float mMaxOrthoSize = 80.0f;
     uint32_t mGVDilationRadius = 1;
     uint32_t mPVVDilationRadius = 1;
+    bool mPVVSurfaceTargets = true;
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;

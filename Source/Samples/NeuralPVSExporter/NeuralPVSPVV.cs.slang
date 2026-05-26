@@ -150,7 +150,8 @@ cbuffer PVVRayCB
     uint gRayLinearZ;          // 1 = linear (lerp), 0 = log-depth — must match GV generation setting
     float gRayLogDepthScale;   // only used when gRayLinearZ == 0
     uint gRayPVVDilationRadius;
-    uint2 gRayPadding4;
+    uint gRaySurfaceTargetMode;
+    uint gRayPadding4;
 };
 
 float3 rayNormalizedOrFallback(float3 v, float3 fallback)
@@ -211,11 +212,8 @@ bool isInsideRayCameraFrustum(float3 origin, float3 voxelWorld)
     return abs(x) <= tanHalfX && abs(y) <= tanHalfY;
 }
 
-float3 rayVoxelToWorld(uint x, uint y, uint z)
+float3 rayVolume01ToWorld(float3 voxel01)
 {
-    float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f) /
-        float3(float(gRayVolumeSize), float(gRayVolumeSize), float(gRayVolumeDepth));
-
     if (gRayUseProjectionVolume == 0u)
         return gRaySceneMin + voxel01 * gRaySceneExtent;
 
@@ -240,6 +238,37 @@ float3 rayVoxelToWorld(uint x, uint y, uint z)
         rayNormalizedOrFallback(gRayViewCellForward, float3(0.f, 0.f, -1.f)) * depth +
         rayNormalizedOrFallback(gRayViewCellRight, float3(1.f, 0.f, 0.f)) * (xNdc * depth * gRayTanHalfFovX) +
         rayNormalizedOrFallback(gRayViewCellUp, float3(0.f, 1.f, 0.f)) * (yNdc * depth * gRayTanHalfFovY);
+}
+
+float3 rayVoxelToWorld(uint x, uint y, uint z)
+{
+    float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f) /
+        float3(float(gRayVolumeSize), float(gRayVolumeSize), float(gRayVolumeDepth));
+
+    return rayVolume01ToWorld(voxel01);
+}
+
+float3 rayVoxelTargetToWorld(uint x, uint y, uint z, uint targetIndex)
+{
+    float3 offset = float3(0.f);
+    if (gRaySurfaceTargetMode != 0u)
+    {
+        switch (targetIndex)
+        {
+        case 1: offset = float3( 0.45f, 0.f, 0.f); break;
+        case 2: offset = float3(-0.45f, 0.f, 0.f); break;
+        case 3: offset = float3(0.f,  0.45f, 0.f); break;
+        case 4: offset = float3(0.f, -0.45f, 0.f); break;
+        case 5: offset = float3(0.f, 0.f,  0.45f); break;
+        case 6: offset = float3(0.f, 0.f, -0.45f); break;
+        default: break;
+        }
+    }
+
+    float3 voxel01 = (float3(float(x), float(y), float(z)) + 0.5f + offset) /
+        float3(float(gRayVolumeSize), float(gRayVolumeSize), float(gRayVolumeDepth));
+
+    return rayVolume01ToWorld(voxel01);
 }
 
 void writeRayPVVBit(uint x, uint y, uint z)
@@ -297,22 +326,27 @@ void rayMain(uint3 id : SV_DispatchThreadID)
             continue;
 
         uint x = id.x * 32u + bit;
-        float3 voxelWorld = rayVoxelToWorld(x, id.y, id.z);
 
         bool visible = false;
-        for (uint sampleIndex = 0u; sampleIndex < gRaySampleCount && !visible; ++sampleIndex)
+        const uint targetCount = gRaySurfaceTargetMode != 0u ? 7u : 1u;
+        for (uint targetIndex = 0u; targetIndex < targetCount && !visible; ++targetIndex)
         {
-            float3 origin = gRayViewCellCenter + getRaySampleOffset(sampleIndex);
-            float3 toVoxel = voxelWorld - origin;
-            float distance = length(toVoxel);
-            if (distance <= 0.001f)
-                continue;
+            float3 voxelWorld = rayVoxelTargetToWorld(x, id.y, id.z, targetIndex);
 
-            if (!isInsideRayCameraFrustum(origin, voxelWorld))
-                continue;
+            for (uint sampleIndex = 0u; sampleIndex < gRaySampleCount && !visible; ++sampleIndex)
+            {
+                float3 origin = gRayViewCellCenter + getRaySampleOffset(sampleIndex);
+                float3 toVoxel = voxelWorld - origin;
+                float distance = length(toVoxel);
+                if (distance <= 0.001f)
+                    continue;
 
-            Ray ray = Ray(origin, toVoxel / distance, 0.01f, distance * 0.98f);
-            visible = rayQuery.traceVisibilityRay(ray);
+                if (!isInsideRayCameraFrustum(origin, voxelWorld))
+                    continue;
+
+                Ray ray = Ray(origin, toVoxel / distance, 0.01f, distance * 0.98f);
+                visible = rayQuery.traceVisibilityRay(ray);
+            }
         }
 
         if (visible)

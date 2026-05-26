@@ -459,6 +459,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             {
                 w.var("GV dilation radius", mGVDilationRadius, 0u, 1u);
                 w.var("PVV dilation radius", mPVVDilationRadius, 0u, 1u);
+                w.checkbox("PVV surface targets", mPVVSurfaceTargets);
             }
             if (mExportMode == 3)
             {
@@ -2418,6 +2419,7 @@ void NeuralPVSExporter::exportOneSample(
         pvvRoot["PVVRayCB"]["gRayLinearZ"] = mLinearZ ? 1u : 0u;
         pvvRoot["PVVRayCB"]["gRayLogDepthScale"] = mLogDepthScale;
         pvvRoot["PVVRayCB"]["gRayPVVDilationRadius"] = effectivePVVDilationRadius;
+        pvvRoot["PVVRayCB"]["gRaySurfaceTargetMode"] = mPVVSurfaceTargets ? 1u : 0u;
 
         mpPVVRayPass->execute(pRenderContext, mVolumeSize / 32u, mVolumeSize, mVolumeDepth);
     }
@@ -2485,6 +2487,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"max_ortho_size\": " << mMaxOrthoSize << ",\n";
     metadata << "  \"gv_dilation_radius\": " << (mPipelinePreset == 1u ? 0u : mGVDilationRadius) << ",\n";
     metadata << "  \"pvv_dilation_radius\": " << (mPipelinePreset == 1u ? 0u : mPVVDilationRadius) << ",\n";
+    metadata << "  \"pvv_surface_targets\": " << (mPipelinePreset == 1u ? "false" : (mPVVSurfaceTargets ? "true" : "false")) << ",\n";
     metadata << "  \"sample_count\": " << samples.size() << ",\n";
     metadata << "  \"volume_size\": [" << mVolumeSize << ", " << mVolumeSize << ", " << mVolumeDepth << "],\n";
     metadata << "  \"scene_bounds_min\": [" << sceneBounds.minPoint.x << ", " << sceneBounds.minPoint.y << ", " << sceneBounds.minPoint.z << "],\n";
