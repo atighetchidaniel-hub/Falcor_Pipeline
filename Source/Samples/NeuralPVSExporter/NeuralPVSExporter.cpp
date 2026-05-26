@@ -442,7 +442,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             }
 
             w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
-            w.var("View cell radius", mViewCellRadius, 0.001f, 10.0f, 0.001f);
+            w.var("View cell radius (m)", mViewCellRadius, 0.001f, 10.0f, 0.001f);
             w.var("View cell near", mViewCellNearPlane, 0.001f, 10.0f, 0.001f);
             w.var("View cell far", mViewCellFarPlane, 0.1f, 1000.0f, 0.1f);
             w.var("Sampling factor", mSamplingFactor, 1u, 8u);
@@ -2476,6 +2476,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
     metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
     metadata << "  \"view_cell_radius\": " << mViewCellRadius << ",\n";
+    metadata << "  \"view_cell_radius_cm\": " << (mViewCellRadius * 100.0f) << ",\n";
     metadata << "  \"view_cell_near\": " << mViewCellNearPlane << ",\n";
     metadata << "  \"view_cell_far\": " << mViewCellFarPlane << ",\n";
     metadata << "  \"sampling_factor\": " << mSamplingFactor << ",\n";

@@ -1309,6 +1309,8 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
             "volume_depth": args.volume_depth,
             "camera_aspect_ratio": args.camera_aspect_ratio,
             "view_cell_radius": args.view_cell_radius,
+            "view_cell_radius_m": args.view_cell_radius,
+            "view_cell_radius_cm": args.view_cell_radius_cm,
             "view_cell_near": args.near,
             "view_cell_far": args.far,
             "pvv_sample_steps": args.pvv_sample_steps,
@@ -1451,8 +1453,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fov-min",               type=float, default=45.0)
     p.add_argument("--fov-max",               type=float, default=75.0)
 
-    # NeuralPVS exporter defaults (written to manifest only)
-    p.add_argument("--view-cell-radius",            type=float, default=0.3)
+    # NeuralPVS exporter defaults (written to manifest only). The paper's
+    # r30/r60/r90 notation is centimeters, i.e. 0.3/0.6/0.9 scene units.
+    p.add_argument("--view-cell-radius",            type=float, default=None,
+                   help="View-cell radius in meters/scene units. Use 0.3 for r30.")
+    p.add_argument("--view-cell-radius-cm",         type=float, default=None,
+                   help="View-cell radius in centimeters. Use 30, 60, or 90 for paper-style r30/r60/r90.")
     p.add_argument("--near",                        type=float, default=0.3)
     p.add_argument("--far",                         type=float, default=30.0)
     p.add_argument("--pvv-sample-steps",            type=int,   default=10)
@@ -1462,7 +1468,34 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--volume-size",  type=int, default=256)
     p.add_argument("--volume-depth", type=int, default=256)
 
-    return p.parse_args()
+    args = p.parse_args()
+    normalize_view_cell_radius(args)
+    return args
+
+
+def infer_view_cell_radius_cm_from_name(name: str) -> Optional[float]:
+    match = re.search(r"(?:^|[_-])r(30|60|90)(?:$|[_-])", name)
+    return float(match.group(1)) if match else None
+
+
+def normalize_view_cell_radius(args: argparse.Namespace) -> None:
+    inferred_cm = infer_view_cell_radius_cm_from_name(args.name)
+    if args.view_cell_radius is not None and args.view_cell_radius_cm is not None:
+        raise ValueError("Use either --view-cell-radius or --view-cell-radius-cm, not both.")
+
+    if args.view_cell_radius_cm is not None:
+        args.view_cell_radius = args.view_cell_radius_cm / 100.0
+    elif args.view_cell_radius is None:
+        args.view_cell_radius = (inferred_cm / 100.0) if inferred_cm is not None else 0.3
+    elif args.view_cell_radius > 10.0:
+        print(
+            "WARNING: --view-cell-radius looks like centimeters. "
+            "Interpreting it as cm; prefer --view-cell-radius-cm.",
+            file=sys.stderr,
+        )
+        args.view_cell_radius /= 100.0
+
+    args.view_cell_radius_cm = args.view_cell_radius * 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -1519,6 +1552,7 @@ def main() -> None:
     print(f"Clusters      : {len(clusters)} (advanced non-spherical Gaussian)")
     print(f"Boolean zones : {len(zones)}")
     print(f"Camera samples: {len(cameras)}")
+    print(f"View-cell r   : {args.view_cell_radius:.3f} m ({args.view_cell_radius_cm:.0f} cm)")
     if glb_models:
         print(f"GLB models    : {len(glb_models)} loaded, weight={args.glb_model_weight:.2f}")
 

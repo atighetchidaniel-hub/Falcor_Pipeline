@@ -47,7 +47,7 @@ Open the `NeuralPVSExporter` sample and set:
 | Dataset name | Same as the generated scene name, for example `synth_001` |
 | Output root | Folder where datasets should be written |
 | Mode | `Generate GV + PVV` |
-| View cell radius | Usually `0.3` for matching the existing experiments |
+| View cell radius | Use `0.3`, `0.6`, or `0.9` for paper-style `r30`, `r60`, or `r90` (centimeters converted to meters/scene units) |
 | View cell near/far | Usually `0.3` and `30.0`, unless the scene scale changes |
 | PVV sample steps | `10`, matching Unity's default `ViewCellSettings.pvvSampleSteps` |
 | Sampling factor | `2`, matching Unity's default supersampling factor for GV/PVV generation cameras |
