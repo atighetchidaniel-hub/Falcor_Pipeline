@@ -261,6 +261,17 @@ namespace
         return quoted;
     }
 
+    std::string replaceAll(std::string value, const std::string& needle, const std::string& replacement)
+    {
+        size_t pos = 0;
+        while ((pos = value.find(needle, pos)) != std::string::npos)
+        {
+            value.replace(pos, needle.size(), replacement);
+            pos += replacement.size();
+        }
+        return value;
+    }
+
     int32_t renderVolumeSampleOffset(uint32_t mode)
     {
         switch (mode)
@@ -352,6 +363,11 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
         applyPreviewSample();
     }
 
+    if (mLiveNeuralPVSActive)
+    {
+        updateLiveNeuralPVS(pRenderContext);
+    }
+
     if (mRenderScenePreview)
     {
         renderPreview(pRenderContext, pTargetFbo);
@@ -400,6 +416,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 {1, "Generate PVV"},
                 {2, "Generate GV + PVV"},
                 {3, "Render PVV"},
+                {4, "Live NeuralPVS"},
             };
             w.dropdown("Mode", exportModes, mExportMode);
 
@@ -548,6 +565,31 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 }
             }
 
+            if (mExportMode == 4)
+            {
+                w.textbox("Live dataset path", mLiveDatasetRootText);
+                w.checkbox("Auto-query on movement", mLiveAutoUpdate);
+                w.var("Update distance (m)", mLiveUpdateDistance, 0.01f, 5.0f, 0.01f);
+                w.textbox("Python executable", mLivePythonExeText);
+                w.textbox("Bridge script", mLiveBridgeScriptText);
+                w.textbox("NeuralPVS root", mLiveNeuralPVSRootText);
+                w.textbox("Checkpoint", mLiveCheckpointText);
+                w.textbox("Model", mLiveModelText);
+                w.textbox("Backend", mLiveBackendText);
+                w.var("Model depth", mLiveModelDepth, 1u, 8u);
+                w.var("Interleaver r", mLiveInterleaverR, 1u, 64u);
+                w.var("Live z size", mLiveZSize, 32u, 512u);
+                w.var("Threshold", mLiveThreshold, 0.01f, 0.99f, 0.01f);
+                w.textbox("Device", mLiveDeviceText);
+                w.textbox("Command override", mLiveInferenceCommandText);
+                w.text("Live queries: " + std::to_string(mLiveQueryCount));
+                w.text(mLiveStatus);
+                if (!mLiveLastCommand.empty())
+                {
+                    w.text("Last command: " + mLiveLastCommand);
+                }
+            }
+
             Gui::DropdownList pvvFilters = {
                 {1, "None (exact)"},
                 {2, "Box 3x3x3 (surface tolerant)"},
@@ -672,6 +714,11 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     {
         w.text("Predicted PVV: " + getRenderPredictedPVVRoot().string());
         w.text(mRenderStatus);
+    }
+    if (mExportMode == 4)
+    {
+        w.text("Live dataset: " + mLiveDatasetRootText);
+        w.text(mLiveStatus);
     }
     w.text(mLastExportStatus);
 }
@@ -1525,6 +1572,9 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 
 bool NeuralPVSExporter::isModeRunning() const
 {
+    if (mLiveNeuralPVSActive)
+        return true;
+
     if (mProgressiveExportActive)
         return true;
 
@@ -1559,7 +1609,7 @@ void NeuralPVSExporter::startSelectedMode()
 
         mScenePath = std::filesystem::path(mScenePathText);
         mOutputRoot = std::filesystem::path(mOutputRootText);
-        if (mExportMode != 3)
+        if (mExportMode != 3 && mExportMode != 4)
         {
             useGeneratedRenderPaths();
         }
@@ -1589,6 +1639,10 @@ void NeuralPVSExporter::startSelectedMode()
         {
             startRenderPVVMode();
         }
+        else if (mExportMode == 4)
+        {
+            startLiveNeuralPVSMode();
+        }
         else
         {
             startProgressiveExport();
@@ -1597,6 +1651,8 @@ void NeuralPVSExporter::startSelectedMode()
     catch (const std::exception& e)
     {
         mProgressiveExportActive = false;
+        mLiveNeuralPVSActive = false;
+        mLiveHasPrediction = false;
         mPreviewPlayback = false;
         mPreviewAccumulator = 0.0;
         mPreviewWallClockValid = false;
@@ -1613,12 +1669,15 @@ void NeuralPVSExporter::stopCurrentMode()
     mStopRequested = false;
 
     const bool wasProgressiveExport = mProgressiveExportActive;
+    const bool wasLiveNeuralPVS = mLiveNeuralPVSActive;
     const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
     const bool wasPathPlayback = mPreviewPlayback;
     const uint32_t stoppedExportIndex = mProgressiveExportIndex;
     const uint32_t stoppedRenderIndex = mRenderSampleIndex;
 
     mProgressiveExportActive = false;
+    mLiveNeuralPVSActive = false;
+    mLiveHasPrediction = false;
     mPreviewPlayback = false;
     mPreviewAccumulator = 0.0;
     mPreviewWallClockValid = false;
@@ -1638,6 +1697,13 @@ void NeuralPVSExporter::stopCurrentMode()
         return;
     }
 
+    if (wasLiveNeuralPVS)
+    {
+        mLiveStatus = "Live NeuralPVS stopped after " + std::to_string(mLiveQueryCount) + " queries.";
+        mLastExportStatus = mLiveStatus;
+        return;
+    }
+
     if (wasRenderPVV)
     {
         mRenderStatus =
@@ -1648,6 +1714,269 @@ void NeuralPVSExporter::stopCurrentMode()
     }
 
     mLastExportStatus = wasPathPlayback ? "Stopped path playback." : "Nothing is running.";
+}
+
+NeuralPVSExporter::ExportSample NeuralPVSExporter::makeCurrentCameraSample() const
+{
+    if (!mpCamera)
+    {
+        FALCOR_THROW("Live NeuralPVS requires a scene camera.");
+    }
+
+    ExportSample sample;
+    sample.center = mpCamera->getPosition();
+    sample.forward = normalizedOrDefault(mpCamera->getTarget() - sample.center, float3(0.f, 0.f, -1.f));
+    sample.up = normalizedOrDefault(mpCamera->getUpVector(), float3(0.f, 1.f, 0.f));
+    sample.right = normalizedOrDefault(cross(sample.up, sample.forward), float3(1.f, 0.f, 0.f));
+    sample.up = normalizedOrDefault(cross(sample.forward, sample.right), sample.up);
+
+    const float fovYRadians = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
+    sample.fovYDegrees = std::isfinite(fovYRadians) && fovYRadians > 0.f
+        ? std::clamp(fovYRadians * 180.f / 3.1415926535f, 1.f, 179.f)
+        : 60.f;
+    sample.hasCamera = true;
+    sample.hasBasis = true;
+    return sample;
+}
+
+std::string NeuralPVSExporter::buildLiveInferenceCommand(
+    const std::filesystem::path& datasetRoot,
+    const std::filesystem::path& predictedRoot
+) const
+{
+    std::ostringstream threshold;
+    threshold << std::setprecision(6) << mLiveThreshold;
+
+    if (!trim(mLiveInferenceCommandText).empty())
+    {
+        std::string command = mLiveInferenceCommandText;
+        command = replaceAll(command, "{python}", quoteCommandPath(std::filesystem::path(mLivePythonExeText)));
+        command = replaceAll(command, "{script}", quoteCommandPath(std::filesystem::path(mLiveBridgeScriptText)));
+        command = replaceAll(command, "{neuralpvs_root}", quoteCommandPath(std::filesystem::path(mLiveNeuralPVSRootText)));
+        command = replaceAll(command, "{dataset}", quoteCommandPath(datasetRoot));
+        command = replaceAll(command, "{out}", quoteCommandPath(predictedRoot));
+        command = replaceAll(command, "{checkpoint}", quoteCommandPath(std::filesystem::path(mLiveCheckpointText)));
+        command = replaceAll(command, "{model}", mLiveModelText);
+        command = replaceAll(command, "{backend}", mLiveBackendText);
+        command = replaceAll(command, "{model_depth}", std::to_string(mLiveModelDepth));
+        command = replaceAll(command, "{interleaver_r}", std::to_string(mLiveInterleaverR));
+        command = replaceAll(command, "{z_size}", std::to_string(mLiveZSize));
+        command = replaceAll(command, "{threshold}", threshold.str());
+        command = replaceAll(command, "{device}", mLiveDeviceText);
+        return command;
+    }
+
+    if (trim(mLiveCheckpointText).empty())
+    {
+        throw std::runtime_error("Live NeuralPVS checkpoint is empty.");
+    }
+
+    std::ostringstream command;
+    command << quoteCommandPath(std::filesystem::path(mLivePythonExeText)) << " "
+            << quoteCommandPath(std::filesystem::path(mLiveBridgeScriptText))
+            << " --neuralpvs-root " << quoteCommandPath(std::filesystem::path(mLiveNeuralPVSRootText))
+            << " --dataset-root " << quoteCommandPath(datasetRoot)
+            << " --checkpoint " << quoteCommandPath(std::filesystem::path(mLiveCheckpointText))
+            << " --out-dir " << quoteCommandPath(predictedRoot)
+            << " --model " << mLiveModelText
+            << " --backend " << mLiveBackendText
+            << " --model-depth " << mLiveModelDepth
+            << " --interleaver-r " << mLiveInterleaverR
+            << " --z-size " << mLiveZSize
+            << " --threshold " << threshold.str()
+            << " --limit 1 --overwrite";
+
+    if (!trim(mLiveDeviceText).empty())
+    {
+        command << " --device " << mLiveDeviceText;
+    }
+
+    return command.str();
+}
+
+void NeuralPVSExporter::startLiveNeuralPVSMode()
+{
+    mPipelinePreset = 0;
+    mVisibilityMode = 0;
+    mVolumeMappingMode = 0;
+    mLiveNeuralPVSActive = true;
+    mLiveHasPrediction = false;
+    mLiveQueryCount = 0;
+    mPreviewPlayback = false;
+    mPreviewSamples.clear();
+    mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
+    mRenderPVVActive = false;
+    mRenderPVVCullScene = false;
+    mRenderPVVFinished = false;
+    mRenderUseSampleCamera = false;
+    mRenderKeepOutsidePVVInView = true;
+    mRenderPVVOverlay = false;
+    mRenderScenePreview = true;
+    mRenderVolumeSource = 0;
+    mRenderVolumeSampleOffsetMode = 2;
+    mRenderPVVFilter = 1;
+    mLiveStatus = "Live NeuralPVS starting; first camera query will run on the next frame.";
+    mLastExportStatus = mLiveStatus;
+}
+
+void NeuralPVSExporter::updateLiveNeuralPVS(RenderContext* pRenderContext)
+{
+    if (!mLiveNeuralPVSActive || !mpCamera)
+        return;
+
+    const ExportSample sample = makeCurrentCameraSample();
+    if (mLiveHasPrediction)
+    {
+        if (!mLiveAutoUpdate)
+            return;
+
+        const float updateDistance = std::max(0.001f, mLiveUpdateDistance);
+        if (length(sample.center - mLiveLastQueryCenter) < updateDistance)
+            return;
+    }
+
+    try
+    {
+        if (!queryLiveNeuralPVS(pRenderContext, sample))
+        {
+            mLiveNeuralPVSActive = false;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        mLiveNeuralPVSActive = false;
+        mRenderPVVCullScene = false;
+        mRenderPVVActive = false;
+        mLiveStatus = "Live NeuralPVS failed: " + std::string(e.what());
+        mLastExportStatus = mLiveStatus;
+    }
+}
+
+bool NeuralPVSExporter::queryLiveNeuralPVS(RenderContext* pRenderContext, const ExportSample& sample)
+{
+    std::filesystem::path datasetRoot = std::filesystem::path(mLiveDatasetRootText);
+    if (datasetRoot.empty() || datasetRoot.filename().empty())
+    {
+        throw std::runtime_error("Live dataset path must point to a dataset folder.");
+    }
+
+    datasetRoot = datasetRoot.lexically_normal();
+    const std::filesystem::path liveOutputRoot = datasetRoot.parent_path().empty() ? std::filesystem::path(".") : datasetRoot.parent_path();
+    const std::string liveDatasetName = datasetRoot.filename().string();
+    const std::filesystem::path predictedRoot = datasetRoot / "predicted_pvv";
+
+    mLiveStatus = "Live NeuralPVS exporting GV for current camera...";
+    mLastExportStatus = mLiveStatus;
+
+    removeDirectoryQuietly(datasetRoot / "gv");
+    removeDirectoryQuietly(datasetRoot / "pvv");
+    removeDirectoryQuietly(predictedRoot);
+    std::error_code removeMetadataError;
+    std::filesystem::remove(datasetRoot / "metadata.json", removeMetadataError);
+    std::filesystem::create_directories(datasetRoot);
+
+    const AABB sceneBounds = mpScene->getSceneBounds();
+    const float3 sceneCenter = sceneBounds.center();
+    const float3 sceneExtent = max(sceneBounds.extent(), float3(0.0001f));
+    const float3 volumeExtent = sceneExtent * mVolumeExtentScale;
+    const float3 sampleStep = sceneExtent * mSampleStepScale;
+
+    const uint32_t oldExportMode = mExportMode;
+    const std::filesystem::path oldOutputRoot = mOutputRoot;
+    const std::string oldDatasetName = mDatasetName;
+
+    uint64_t gvBitCount = 0;
+    uint64_t pvvBitCount = 0;
+    try
+    {
+        mExportMode = 4;
+        mOutputRoot = liveOutputRoot;
+        mDatasetName = liveDatasetName;
+        exportOneSample(
+            pRenderContext,
+            sample,
+            0,
+            volumeExtent,
+            std::max(0.001f, mViewCellRadius),
+            gvBitCount,
+            pvvBitCount
+        );
+        writeExportMetadata(
+            std::vector<ExportSample>{sample},
+            std::vector<uint64_t>{gvBitCount},
+            std::vector<uint64_t>{0u},
+            sceneBounds,
+            sceneCenter,
+            sceneExtent,
+            volumeExtent,
+            sampleStep,
+            false
+        );
+    }
+    catch (...)
+    {
+        mExportMode = oldExportMode;
+        mOutputRoot = oldOutputRoot;
+        mDatasetName = oldDatasetName;
+        throw;
+    }
+
+    mExportMode = oldExportMode;
+    mOutputRoot = oldOutputRoot;
+    mDatasetName = oldDatasetName;
+
+    const std::string command = buildLiveInferenceCommand(datasetRoot, predictedRoot);
+    mLiveLastCommand = command;
+    mLiveStatus = "Live NeuralPVS running inference command...";
+    mLastExportStatus = mLiveStatus;
+
+    const int result = std::system(command.c_str());
+    if (result != 0)
+    {
+        mLiveStatus =
+            "Live NeuralPVS inference command failed with code " + std::to_string(result) + ": " + command;
+        mLastExportStatus = mLiveStatus;
+        return false;
+    }
+
+    const std::filesystem::path predictedPath = predictedRoot / "0_predicted_pvv.bin.gz";
+    if (!std::filesystem::exists(predictedPath))
+    {
+        mLiveStatus = "Live NeuralPVS did not produce " + predictedPath.string();
+        mLastExportStatus = mLiveStatus;
+        return false;
+    }
+
+    mRenderDatasetRootText = datasetRoot.string();
+    mPredictedPVVRootText = predictedRoot.string();
+    mRenderDatasetRoot.clear();
+    mRenderSamples.clear();
+    mRenderSampleIndex = 0;
+    mRenderVolumeSource = 0;
+    mRenderVolumeSampleOffsetMode = 2;
+    mRenderUseSampleCamera = false;
+    mRenderKeepOutsidePVVInView = true;
+    mRenderPVVCullScene = true;
+    mRenderPVVActive = true;
+    mRenderPVVFinished = false;
+    mPreviewSamples.clear();
+    mPreviewPlayback = false;
+    mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
+
+    loadRenderMetadata();
+    if (!ensureRenderVolumeLoaded(true))
+        return false;
+
+    mLiveHasPrediction = true;
+    mLiveLastQueryCenter = sample.center;
+    ++mLiveQueryCount;
+    mLiveStatus =
+        "Live NeuralPVS query " + std::to_string(mLiveQueryCount) + " ready. GV bits: " +
+        std::to_string(gvBitCount) + ". Predicted PVV: " + predictedPath.string();
+    mLastExportStatus = mLiveStatus;
+    return true;
 }
 
 void NeuralPVSExporter::startRenderPVVMode()
@@ -2572,7 +2901,7 @@ void NeuralPVSExporter::writeVolumePair(
 
     const std::filesystem::path datasetRoot = mOutputRoot / datasetName;
 
-    if (mExportMode == 0 || mExportMode == 2)
+    if (mExportMode == 0 || mExportMode == 2 || mExportMode == 4)
     {
         writeVolumeFile(datasetRoot / "gv" / fourDigitName(index, "_gv.bin.gz"), gvBytes);
     }

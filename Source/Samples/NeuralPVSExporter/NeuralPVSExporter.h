@@ -72,6 +72,14 @@ private:
     void startSelectedMode();
     void stopCurrentMode();
     void startRenderPVVMode();
+    void startLiveNeuralPVSMode();
+    void updateLiveNeuralPVS(RenderContext* pRenderContext);
+    bool queryLiveNeuralPVS(RenderContext* pRenderContext, const ExportSample& sample);
+    ExportSample makeCurrentCameraSample() const;
+    std::string buildLiveInferenceCommand(
+        const std::filesystem::path& datasetRoot,
+        const std::filesystem::path& predictedRoot
+    ) const;
     void useGeneratedRenderPaths();
     uint32_t getRenderVolumeSampleIndex() const;
     std::filesystem::path resolveRenderVolumePath() const;
@@ -155,7 +163,7 @@ private:
     uint32_t mSamplesPerAxis = 5;
     float mVolumeExtentScale = 0.65f;
     float mSampleStepScale = 0.05f;
-    uint32_t mExportMode = 3; // 0 = Generate GV, 1 = Generate PVV, 2 = Generate GV + PVV, 3 = Render PVV
+    uint32_t mExportMode = 3; // 0 = Generate GV, 1 = Generate PVV, 2 = Generate GV + PVV, 3 = Render PVV, 4 = Live NeuralPVS
     bool mWriteDebugProjections = false;
 
     uint32_t mSamplingMode = 1; // 0 = grid, 1 = path CSV
@@ -178,6 +186,28 @@ private:
     uint32_t mGVDilationRadius = 1;
     uint32_t mPVVDilationRadius = 1;
     bool mPVVSurfaceTargets = true;
+
+    std::string mLiveDatasetRootText = "T:/Falcor/neuralpvs_export_test/live/falcor_live_neuralpvs";
+    std::string mLivePythonExeText = "python";
+    std::string mLiveBridgeScriptText = "T:/Falcor/Source/Samples/NeuralPVSExporter/tools/falcor_bridge_infer.py";
+    std::string mLiveNeuralPVSRootText = "T:/Adapted_fvdb";
+    std::string mLiveCheckpointText;
+    std::string mLiveInferenceCommandText;
+    std::string mLiveModelText = "OACNNsInterleaved";
+    std::string mLiveBackendText = "fvdb";
+    std::string mLiveDeviceText = "cuda";
+    uint32_t mLiveModelDepth = 3;
+    uint32_t mLiveInterleaverR = 16;
+    uint32_t mLiveZSize = 256;
+    float mLiveThreshold = 0.5f;
+    float mLiveUpdateDistance = 0.3f;
+    bool mLiveAutoUpdate = true;
+    bool mLiveNeuralPVSActive = false;
+    bool mLiveHasPrediction = false;
+    uint32_t mLiveQueryCount = 0;
+    float3 mLiveLastQueryCenter = float3(0.f);
+    std::string mLiveStatus = "Live NeuralPVS is idle.";
+    std::string mLiveLastCommand;
 
     bool mRenderScenePreview = true;
     bool mPreviewPlayback = false;
