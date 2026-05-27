@@ -10,6 +10,7 @@ Unity-style synthetic scene features inspired by Unity's RuntimeSceneGenerator:
   - Boolean clearing zones (tunnels / roads / spherical cavities) that remove objects they overlap
   - Random thin environmental planes around the scene
   - Orbit-based camera sampling with randomised distance, height, tilt, target offset, and FOV
+  - Optional Unity-parity preset matching RuntimeSceneGenerator defaults as closely as Falcor allows
 
 The generated .pyscene file can be loaded by the NeuralPVSExporter sample.
 The matching CSV provides viewcell/camera samples for GV/PVV generation.
@@ -143,6 +144,14 @@ class CameraSample:
 
 
 @dataclass
+class SceneBounds:
+    center: Vec3
+    size: Vec3
+    min_corner: Vec3
+    max_corner: Vec3
+
+
+@dataclass
 class GlbModel:
     """One GLB file from the model library — mirrors Unity's ModelDefinition."""
     name: str             # human-readable name, e.g. "Dodecahedron"
@@ -170,6 +179,17 @@ def f4(v: Iterable[float]) -> str:
     return f"float4({x:.5f}, {y:.5f}, {z:.5f}, {w:.5f})"
 
 
+def euler_abs_extents(rotation_deg: Vec3, half_extents: Vec3) -> Vec3:
+    """Axis-aligned half extents after applying the instance Euler rotation."""
+    m = mat3_from_euler_xyz_deg(rotation_deg[0], rotation_deg[1], rotation_deg[2])
+    hx, hy, hz = half_extents
+    return (
+        abs(m[0]) * hx + abs(m[1]) * hy + abs(m[2]) * hz,
+        abs(m[3]) * hx + abs(m[4]) * hy + abs(m[5]) * hz,
+        abs(m[6]) * hx + abs(m[7]) * hy + abs(m[8]) * hz,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Random colour generation  (true per-object random, not a fixed palette)
 # ---------------------------------------------------------------------------
@@ -194,9 +214,13 @@ def make_clusters(rng: random.Random, args: argparse.Namespace) -> List[Gaussian
     clusters: List[GaussianCluster] = []
 
     for _ in range(args.cluster_count):
-        # Base centre (within 80% of bounds, bias toward above-floor)
+        # Base centre. Unity's RuntimeSceneGenerator samples the full centered
+        # spawn volume; the older Falcor preset biased objects above a floor.
         cx = rng.uniform(-0.40 * bx, 0.40 * bx)
-        cy = rng.uniform(0.10 * by, 0.75 * by)
+        if args.centered_y_distribution:
+            cy = rng.uniform(-0.40 * by, 0.40 * by)
+        else:
+            cy = rng.uniform(0.10 * by, 0.75 * by)
         cz = rng.uniform(-0.40 * bz, 0.40 * bz)
         # Position noise
         if pn > 0:
@@ -205,7 +229,10 @@ def make_clusters(rng: random.Random, args: argparse.Namespace) -> List[Gaussian
             cy += gauss_01(rng) * by * ns
             cz += gauss_01(rng) * bz * ns
         cx = clamp(cx, -0.45 * bx, 0.45 * bx)
-        cy = clamp(cy, 0.05 * by, 0.90 * by)
+        if args.centered_y_distribution:
+            cy = clamp(cy, -0.45 * by, 0.45 * by)
+        else:
+            cy = clamp(cy, 0.05 * by, 0.90 * by)
         cz = clamp(cz, -0.45 * bz, 0.45 * bz)
 
         # Elliptical scale
@@ -263,11 +290,12 @@ def generate_position(rng: random.Random, args: argparse.Namespace,
         c = select_weighted_cluster(rng, clusters)
         p = sample_cluster_position(rng, c, (bx, by, bz))
     else:
-        p = (rng.uniform(-0.45*bx, 0.45*bx),
-             rng.uniform(0.05*by, 0.90*by),
-             rng.uniform(-0.45*bz, 0.45*bz))
+        y = rng.uniform(-0.50 * by, 0.50 * by) if args.centered_y_distribution else rng.uniform(0.05 * by, 0.90 * by)
+        p = (rng.uniform(-0.45*bx, 0.45*bx), y, rng.uniform(-0.45*bz, 0.45*bz))
+
+    y_min, y_max = (-0.50 * by, 0.50 * by) if args.centered_y_distribution else (0.02 * by, 0.95 * by)
     return (clamp(p[0], -0.45*bx, 0.45*bx),
-            clamp(p[1], 0.02*by, 0.95*by),
+            clamp(p[1], y_min, y_max),
             clamp(p[2], -0.45*bz, 0.45*bz))
 
 
@@ -930,27 +958,29 @@ def make_instances(args: argparse.Namespace,
     colors = make_random_colors(rng, args.color_count)
     instances: List[Instance] = []
 
-    # --- Floor ---
-    instances.append(Instance(
-        name="floor", mesh="cube", color_idx=0,
-        translation=(0.0, -0.06, 0.0),
-        scaling=(bx, 0.12, bz),
-        rotation=(0.0, 0.0, 0.0),
-    ))
+    # --- Optional floor ---
+    if args.fixed_floor:
+        instances.append(Instance(
+            name="floor", mesh="cube", color_idx=0,
+            translation=(0.0, -0.06, 0.0),
+            scaling=(bx, 0.12, bz),
+            rotation=(0.0, 0.0, 0.0),
+        ))
 
     # --- Boundary walls ---
-    edge_h = min(2.5, by)
-    et = 0.18
-    for label, tr, sc in [
-        ("north", (0.0, edge_h*0.5,  0.5*bz), (bx, edge_h, et)),
-        ("south", (0.0, edge_h*0.5, -0.5*bz), (bx, edge_h, et)),
-        ("east",  (0.5*bx, edge_h*0.5, 0.0),  (et, edge_h, bz)),
-        ("west",  (-0.5*bx, edge_h*0.5, 0.0), (et, edge_h, bz)),
-    ]:
-        instances.append(Instance(
-            name=f"boundary_{label}", mesh="cube", color_idx=1,
-            translation=tr, scaling=sc, rotation=(0.0, 0.0, 0.0),
-        ))
+    if args.boundary_walls:
+        edge_h = min(2.5, by)
+        et = 0.18
+        for label, tr, sc in [
+            ("north", (0.0, edge_h*0.5,  0.5*bz), (bx, edge_h, et)),
+            ("south", (0.0, edge_h*0.5, -0.5*bz), (bx, edge_h, et)),
+            ("east",  (0.5*bx, edge_h*0.5, 0.0),  (et, edge_h, bz)),
+            ("west",  (-0.5*bx, edge_h*0.5, 0.0), (et, edge_h, bz)),
+        ]:
+            instances.append(Instance(
+                name=f"boundary_{label}", mesh="cube", color_idx=1,
+                translation=tr, scaling=sc, rotation=(0.0, 0.0, 0.0),
+            ))
 
     # --- Interior wall segments ---
     make_wall_segments(rng, args, len(colors), instances)
@@ -982,11 +1012,14 @@ def make_instances(args: argparse.Namespace,
         mesh = select_mesh(rng, args, glb_models)
         sc = generate_scale(rng, args)
 
-        # Set Y so object bottom sits near the floor; 12% chance of floating
-        base_y = sc[1] * 0.5
-        if rng.random() < 0.12:
-            base_y += rng.uniform(0.4, max(0.5, by * 0.45))
-        p = (p[0], base_y, p[2])
+        if args.ground_objects:
+            # Set Y so object bottom sits near the floor; 12% chance of floating.
+            # Unity-parity mode disables this because Unity's RuntimeSceneGenerator
+            # instantiates objects directly in the 3D spawn volume.
+            base_y = sc[1] * 0.5
+            if rng.random() < 0.12:
+                base_y += rng.uniform(0.4, max(0.5, by * 0.45))
+            p = (p[0], base_y, p[2])
 
         # Boolean zone rejection — expand zone by the object's bounding radius so
         # large objects that merely straddle the zone boundary are also excluded.
@@ -994,8 +1027,15 @@ def make_instances(args: argparse.Namespace,
         if any(point_in_zone(p, z, expand=obj_radius) for z in zones):
             continue
 
-        rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 20))
-        cidx = rng.randint(2, len(colors) - 1)  # skip reserved floor/wall colours
+        if args.rotation_mode == "full":
+            rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 360))
+        elif args.rotation_mode == "y_only":
+            rot = (0.0, rng.uniform(0, 360), 0.0)
+        else:
+            rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 20))
+
+        reserved_colors = 2 if (args.fixed_floor or args.boundary_walls or args.wall_count > 0) else 0
+        cidx = rng.randint(reserved_colors, len(colors) - 1)
 
         instances.append(Instance(
             name=f"object_{len(placed):04d}",
@@ -1010,13 +1050,72 @@ def make_instances(args: argparse.Namespace,
     return instances, clusters, zones, colors
 
 
+def compute_scene_bounds(instances: List[Instance],
+                         args: argparse.Namespace,
+                         include_planes: bool = False) -> SceneBounds:
+    """Approximate Unity Renderer.bounds for camera placement.
+
+    Unity's RuntimeSceneGenerator positions the camera from generated object
+    renderer bounds and excludes environmental planes. Falcor's generator has
+    normalized unit meshes, so the transformed unit-box AABB is a close proxy.
+    """
+    relevant = [
+        inst for inst in instances
+        if include_planes or not inst.name.startswith("env_plane_")
+    ]
+    if not relevant:
+        size = (args.bounds_x, args.bounds_y, args.bounds_z)
+        center = (0.0, 0.0, 0.0)
+        return SceneBounds(
+            center=center,
+            size=size,
+            min_corner=(-0.5 * size[0], -0.5 * size[1], -0.5 * size[2]),
+            max_corner=(0.5 * size[0], 0.5 * size[1], 0.5 * size[2]),
+        )
+
+    mn = [float("inf"), float("inf"), float("inf")]
+    mx = [float("-inf"), float("-inf"), float("-inf")]
+    for inst in relevant:
+        half = (inst.scaling[0] * 0.5, inst.scaling[1] * 0.5, inst.scaling[2] * 0.5)
+        ext = euler_abs_extents(inst.rotation, half)
+        for axis in range(3):
+            mn[axis] = min(mn[axis], inst.translation[axis] - ext[axis])
+            mx[axis] = max(mx[axis], inst.translation[axis] + ext[axis])
+
+    # Unity calls Bounds.Expand(Vector3.one * 2f .magnitude). Bounds.Expand(float)
+    # adds the value to the total size, so each extent grows by half that amount.
+    safety_extent = math.sqrt(12.0) * 0.5
+    for axis in range(3):
+        mn[axis] -= safety_extent
+        mx[axis] += safety_extent
+
+    max_allowed_min = [-0.6 * args.bounds_x, -0.6 * args.bounds_y, -0.6 * args.bounds_z]
+    max_allowed_max = [0.6 * args.bounds_x, 0.6 * args.bounds_y, 0.6 * args.bounds_z]
+    for axis in range(3):
+        mn[axis] = max(mn[axis], max_allowed_min[axis])
+        mx[axis] = min(mx[axis], max_allowed_max[axis])
+
+    size = (max(mx[0] - mn[0], 1e-3), max(mx[1] - mn[1], 1e-3), max(mx[2] - mn[2], 1e-3))
+    center = ((mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5)
+    return SceneBounds(center=center, size=size, min_corner=tuple(mn), max_corner=tuple(mx))
+
+
 # ---------------------------------------------------------------------------
 # Camera sampling  (orbit-based, matching Unity's PositionCameraRandomly)
 # ---------------------------------------------------------------------------
 
-def make_camera_samples(args: argparse.Namespace) -> List[CameraSample]:
+def make_camera_samples(args: argparse.Namespace,
+                        scene_bounds: Optional[SceneBounds] = None) -> List[CameraSample]:
     rng = random.Random(args.seed + 9173)
-    bx, by, bz = args.bounds_x, args.bounds_y, args.bounds_z
+    if args.camera_use_scene_bounds and scene_bounds is not None:
+        bx, by, bz = scene_bounds.size
+        center = scene_bounds.center
+        default_target = scene_bounds.center
+    else:
+        bx, by, bz = args.bounds_x, args.bounds_y, args.bounds_z
+        center = (0.0, 0.0, 0.0)
+        default_target = (0.0, by * 0.3, 0.0)
+
     fov_rad = math.radians(args.fov)
     h_fov_rad = 2.0 * math.atan(math.tan(fov_rad * 0.5) * args.camera_aspect_ratio)
     base_dist = max(
@@ -1026,24 +1125,27 @@ def make_camera_samples(args: argparse.Namespace) -> List[CameraSample]:
 
     samples: List[CameraSample] = []
     for _ in range(args.camera_count):
-        dist = max(base_dist * rng.uniform(args.camera_distance_min, args.camera_distance_max), 3.0)
+        dist = max(base_dist * rng.uniform(args.camera_distance_min, args.camera_distance_max), args.camera_min_distance)
         angle = rng.uniform(math.radians(args.camera_angle_min), math.radians(args.camera_angle_max))
         tilt  = math.radians(rng.uniform(args.camera_tilt_min, args.camera_tilt_max))
         h_off = rng.uniform(args.camera_height_min, args.camera_height_max) * by * 0.5
 
         hd = dist * math.cos(tilt)
         vd = dist * math.sin(tilt)
-        px, pz = math.sin(angle)*hd, math.cos(angle)*hd
+        px = center[0] + math.sin(angle) * hd
+        pz = center[2] + math.cos(angle) * hd
         # Clamp Y above the floor so negative tilt + negative height_offset can't
         # bury the camera below the scene (minimum 0.5 m above the floor plane).
-        py = max(0.5, h_off + vd)
+        py = center[1] + h_off + vd
+        if args.clamp_camera_y:
+            py = max(0.5, py)
 
         if args.randomize_camera_target:
-            tx = rng.uniform(-args.camera_target_offset_x, args.camera_target_offset_x)
-            ty = rng.uniform(0.5, min(by*0.5, 3.0))
-            tz = rng.uniform(-args.camera_target_offset_z, args.camera_target_offset_z)
+            tx = center[0] + rng.uniform(-args.camera_target_offset_x, args.camera_target_offset_x)
+            ty = center[1] + rng.uniform(-min(by*0.5, 3.0), min(by*0.5, 3.0))
+            tz = center[2] + rng.uniform(-args.camera_target_offset_z, args.camera_target_offset_z)
         else:
-            tx, ty, tz = 0.0, by * 0.3, 0.0
+            tx, ty, tz = default_target
 
         fov_s = rng.uniform(args.fov_min, args.fov_max) if args.randomize_camera_fov else args.fov
         forward = v3_normalize(v3_sub((tx, ty, tz), (px, py, pz)))
@@ -1272,7 +1374,8 @@ def write_camera_path(path: Path, samples: List[CameraSample]) -> None:
 def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_path: Path,
                    instances: List[Instance], clusters: List[GaussianCluster],
                    zones: List[BooleanZone],
-                   glb_models: Optional[List[GlbModel]] = None) -> None:
+                   glb_models: Optional[List[GlbModel]] = None,
+                   scene_bounds: Optional[SceneBounds] = None) -> None:
     mesh_counts: dict = {}
     for inst in instances:
         mesh_counts[inst.mesh] = mesh_counts.get(inst.mesh, 0) + 1
@@ -1286,6 +1389,12 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
         "wall_count": args.wall_count,
         "camera_count": args.camera_count,
         "bounds": [args.bounds_x, args.bounds_y, args.bounds_z],
+        "unity_parity": args.unity_parity,
+        "fixed_floor": args.fixed_floor,
+        "boundary_walls": args.boundary_walls,
+        "ground_objects": args.ground_objects,
+        "centered_y_distribution": args.centered_y_distribution,
+        "rotation_mode": args.rotation_mode,
         "generated_instance_count": len(instances),
         "mesh_counts": mesh_counts,
         "color_count": args.color_count,
@@ -1297,6 +1406,12 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
             for z in zones
         ],
         "scaling_mode": args.scaling_mode,
+        "computed_scene_bounds": None if scene_bounds is None else {
+            "center": list(scene_bounds.center),
+            "size": list(scene_bounds.size),
+            "min": list(scene_bounds.min_corner),
+            "max": list(scene_bounds.max_corner),
+        },
         "suggested_neuralpvs_exporter_settings": {
             "mode": "Generate GV + PVV",
             "scene_path": str(scene_path),
@@ -1343,7 +1458,91 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+def provided_flags(argv: List[str]) -> set:
+    return {a.split("=", 1)[0] for a in argv if a.startswith("--")}
+
+
+def flag_provided(flags: set, *names: str) -> bool:
+    return any(name in flags for name in names)
+
+
+def set_unless_provided(args: argparse.Namespace, flags: set, attr: str, value, *names: str) -> None:
+    if not flag_provided(flags, *names):
+        setattr(args, attr, value)
+
+
+def find_default_glb_dir(out_dir: Path) -> Optional[Path]:
+    candidates = [
+        out_dir / "models",
+        out_dir.parent / "models",
+        Path.cwd() / "media" / "SyntheticNeuralPVS" / "models",
+        Path.cwd() / "media" / "UnitySyntheticModels",
+        Path("T:/NeuralPVS_LiveDemo/Assets/models"),
+        Path("H:/NeuralPVS_LiveDemo/Assets/models"),
+        Path("T:/Falcor/media/SyntheticNeuralPVS/models"),
+        Path("C:/dev/Falcor/media/SyntheticNeuralPVS/models"),
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and any(candidate.glob("**/*.glb")):
+            return candidate
+    return None
+
+
+def apply_unity_parity_preset(args: argparse.Namespace) -> None:
+    if not args.unity_parity:
+        return
+
+    flags = args._provided_flags
+    set_unless_provided(args, flags, "bounds_x", 30.0, "--bounds-x")
+    set_unless_provided(args, flags, "bounds_y", 25.0, "--bounds-y")
+    set_unless_provided(args, flags, "bounds_z", 30.0, "--bounds-z")
+    set_unless_provided(args, flags, "min_distance_between_objects", 0.8, "--min-distance-between-objects")
+
+    if not flag_provided(flags, "--object-count", "--objects"):
+        lo = args.object_count_min if args.object_count_min is not None else 50
+        hi = args.object_count_max if args.object_count_max is not None else 150
+        if hi < lo:
+            hi = lo
+        args.object_count = random.Random(args.seed + 31).randint(lo, hi)
+
+    set_unless_provided(args, flags, "wall_count", 0, "--wall-count")
+    set_unless_provided(args, flags, "fixed_floor", False, "--fixed-floor", "--no-fixed-floor")
+    set_unless_provided(args, flags, "boundary_walls", False, "--boundary-walls", "--no-boundary-walls")
+    set_unless_provided(args, flags, "boolean_count", 0, "--boolean-count")
+    set_unless_provided(args, flags, "max_plane_count", 3, "--max-plane-count")
+
+    set_unless_provided(args, flags, "cluster_count", 3, "--cluster-count")
+    set_unless_provided(args, flags, "clustering_intensity", 0.3, "--clustering-intensity")
+    set_unless_provided(args, flags, "cluster_shape_variation", 0.4, "--cluster-shape-variation")
+    set_unless_provided(args, flags, "cluster_size_range", [0.5, 2.5], "--cluster-size-range")
+    set_unless_provided(args, flags, "cluster_density_range", [0.3, 2.0], "--cluster-density-range")
+    set_unless_provided(args, flags, "cluster_position_noise", 0.2, "--cluster-position-noise")
+    set_unless_provided(args, flags, "cluster_rotation_variation", 0.3, "--cluster-rotation-variation")
+
+    set_unless_provided(args, flags, "scaling_mode", "uniform", "--scaling-mode")
+    set_unless_provided(args, flags, "uniform_scale_min", 0.5, "--uniform-scale-min")
+    set_unless_provided(args, flags, "uniform_scale_max", 2.0, "--uniform-scale-max")
+    set_unless_provided(args, flags, "extreme_scaling_probability", 0.2, "--extreme-scaling-probability")
+    set_unless_provided(args, flags, "max_aspect_ratio", 3.0, "--max-aspect-ratio")
+
+    set_unless_provided(args, flags, "ground_objects", False, "--ground-objects", "--no-ground-objects")
+    set_unless_provided(args, flags, "centered_y_distribution", True, "--centered-y-distribution", "--no-centered-y-distribution")
+    set_unless_provided(args, flags, "rotation_mode", "full", "--rotation-mode")
+    set_unless_provided(args, flags, "use_glb_models", True, "--use-glb-models", "--no-use-glb-models")
+    set_unless_provided(args, flags, "glb_model_weight", 1.0, "--glb-model-weight")
+
+    set_unless_provided(args, flags, "randomize_camera_target", False, "--randomize-camera-target", "--no-randomize-camera-target")
+    set_unless_provided(args, flags, "camera_use_scene_bounds", True, "--camera-use-scene-bounds", "--no-camera-use-scene-bounds")
+    set_unless_provided(args, flags, "clamp_camera_y", False, "--clamp-camera-y", "--no-clamp-camera-y")
+    set_unless_provided(args, flags, "camera_min_distance", 5.0, "--camera-min-distance")
+
+    if args.use_glb_models and args.glb_dir is None:
+        args.glb_dir = find_default_glb_dir(args.out_dir)
+
+
 def parse_args() -> argparse.Namespace:
+    argv = sys.argv[1:]
+    flags = provided_flags(argv)
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
 
@@ -1351,14 +1550,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir",  type=Path, required=True)
     p.add_argument("--name",     default="synthetic_neuralpvs_scene")
     p.add_argument("--seed",     type=int, default=1)
+    p.add_argument("--unity-parity", action="store_true",
+                   help="Apply defaults matching Unity RuntimeSceneGenerator: GLB models, "
+                        "50-150 objects, centered 3D placement, scene-bounds camera, "
+                        "no Falcor floor/walls/boolean clearing zones.")
 
     # Scene contents
-    p.add_argument("--object-count", type=int,   default=180)
+    p.add_argument("--object-count", "--objects", dest="object_count", type=int, default=180)
+    p.add_argument("--object-count-min", type=int, default=None,
+                   help="Unity-parity object-count lower bound when --object-count is not provided.")
+    p.add_argument("--object-count-max", type=int, default=None,
+                   help="Unity-parity object-count upper bound when --object-count is not provided.")
     p.add_argument("--wall-count",   type=int,   default=14)
     p.add_argument("--bounds-x",     type=float, default=18.0)
     p.add_argument("--bounds-y",     type=float, default=7.0)
     p.add_argument("--bounds-z",     type=float, default=18.0)
     p.add_argument("--min-distance-between-objects", type=float, default=0.5)
+    p.add_argument("--fixed-floor", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--boundary-walls", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--ground-objects", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--centered-y-distribution", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--rotation-mode", choices=["mostly_upright", "full", "y_only"], default="mostly_upright")
 
     # GLB model library (mirrors Unity's GLBModelCollection)
     p.add_argument("--use-glb-models",   action=argparse.BooleanOptionalAction, default=False,
@@ -1435,11 +1647,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--boolean-random-rotation",   action=argparse.BooleanOptionalAction, default=True)
 
     # Camera sampling
-    p.add_argument("--camera-count",          type=int,   default=128)
+    p.add_argument("--camera-count", "--samples", dest="camera_count", type=int, default=128)
     p.add_argument("--fov",                   type=float, default=60.0)
     p.add_argument("--camera-aspect-ratio",   type=float, default=1.777778)
     p.add_argument("--camera-distance-min",   type=float, default=0.8)
     p.add_argument("--camera-distance-max",   type=float, default=1.5)
+    p.add_argument("--camera-min-distance",   type=float, default=3.0)
     p.add_argument("--camera-height-min",     type=float, default=-0.5)
     p.add_argument("--camera-height-max",     type=float, default=0.8)
     p.add_argument("--camera-angle-min",      type=float, default=0.0,   help="Degrees")
@@ -1449,6 +1662,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--randomize-camera-target",   action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--camera-target-offset-x",    type=float, default=2.0)
     p.add_argument("--camera-target-offset-z",    type=float, default=2.0)
+    p.add_argument("--camera-use-scene-bounds",   action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--clamp-camera-y",            action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--randomize-camera-fov",      action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--fov-min",               type=float, default=45.0)
     p.add_argument("--fov-max",               type=float, default=75.0)
@@ -1457,7 +1672,7 @@ def parse_args() -> argparse.Namespace:
     # r30/r60/r90 notation is centimeters, i.e. 0.3/0.6/0.9 scene units.
     p.add_argument("--view-cell-radius",            type=float, default=None,
                    help="View-cell radius in meters/scene units. Use 0.3 for r30.")
-    p.add_argument("--view-cell-radius-cm",         type=float, default=None,
+    p.add_argument("--view-cell-radius-cm", "--radius", dest="view_cell_radius_cm", type=float, default=None,
                    help="View-cell radius in centimeters. Use 30, 60, or 90 for paper-style r30/r60/r90.")
     p.add_argument("--near",                        type=float, default=0.3)
     p.add_argument("--far",                         type=float, default=30.0)
@@ -1468,7 +1683,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--volume-size",  type=int, default=256)
     p.add_argument("--volume-depth", type=int, default=256)
 
-    args = p.parse_args()
+    args = p.parse_args(argv)
+    args._provided_flags = flags
+    apply_unity_parity_preset(args)
     normalize_view_cell_radius(args)
     return args
 
@@ -1533,12 +1750,13 @@ def main() -> None:
     manifest_path = args.out_dir / f"{args.name}_manifest.json"
 
     instances, clusters, zones, colors = make_instances(args, glb_models)
-    cameras = make_camera_samples(args)
+    scene_bounds = compute_scene_bounds(instances, args, include_planes=False)
+    cameras = make_camera_samples(args, scene_bounds)
 
     write_scene(scene_path, instances, colors, cameras[0], glb_models)
     write_camera_path(csv_path, cameras)
     write_manifest(manifest_path, args, scene_path, csv_path, instances, clusters, zones,
-                   glb_models)
+                   glb_models, scene_bounds)
 
     mesh_counts: dict = {}
     for inst in instances:
@@ -1552,6 +1770,7 @@ def main() -> None:
     print(f"Clusters      : {len(clusters)} (advanced non-spherical Gaussian)")
     print(f"Boolean zones : {len(zones)}")
     print(f"Camera samples: {len(cameras)}")
+    print(f"Scene bounds  : center={scene_bounds.center}, size={scene_bounds.size}")
     print(f"View-cell r   : {args.view_cell_radius:.3f} m ({args.view_cell_radius_cm:.0f} cm)")
     if glb_models:
         print(f"GLB models    : {len(glb_models)} loaded, weight={args.glb_model_weight:.2f}")

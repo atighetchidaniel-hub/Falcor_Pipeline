@@ -4,7 +4,7 @@ This folder contains a Falcor sample that exports NeuralPVS-style geometry volum
 
 ## What The Generator Adds
 
-`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes made of floors, boundary geometry, wall segments with openings, clustered cubes, and clustered spheres. These objects are not labels by themselves. They are synthetic geometry that the exporter can convert into GV inputs and PVV ground-truth targets.
+`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes that the exporter can convert into GV inputs and PVV ground-truth targets. The default mode is Falcor-native and can include floors, boundary geometry, wall segments, primitive meshes, and boolean clearing zones. The `--unity-parity` preset instead mirrors Unity's `RuntimeSceneGenerator` defaults more closely: GLB models, 50-150 objects unless overridden, centered 3D object placement, uniform scale `0.5..2.0`, no extra Falcor floor/walls/boolean zones, and camera placement from generated scene bounds.
 
 The script also writes a camera path CSV. Each row defines one viewcell/camera sample:
 
@@ -35,6 +35,21 @@ data/neuralpvs_synthetic/synth_001/synth_001.pyscene
 data/neuralpvs_synthetic/synth_001/synth_001_camera_path.csv
 data/neuralpvs_synthetic/synth_001/synth_001_manifest.json
 ```
+
+For Unity-comparable synthetic training data, prefer the parity preset:
+
+```bash
+python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_scene.py \
+  --unity-parity \
+  --out-dir data/neuralpvs_synthetic/synth_train_1000_r30_unityparity \
+  --name synth_train_1000_r30_unityparity \
+  --seed 30030 \
+  --samples 1000 \
+  --radius 30 \
+  --glb-dir /path/to/Unity/Assets/models
+```
+
+Use `--object-count 200` if you intentionally want a fixed 200-object stress test; otherwise `--unity-parity` samples the object count from Unity's default `50..150` range.
 
 ## Export GV/PVV In Falcor
 
