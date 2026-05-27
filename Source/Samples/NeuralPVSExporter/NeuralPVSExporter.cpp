@@ -1702,19 +1702,21 @@ void NeuralPVSExporter::startSelectedMode()
 
 void NeuralPVSExporter::stopCurrentMode()
 {
+    const bool wasProgressiveExport = mProgressiveExportActive;
+    const bool wasLiveNeuralPVS = mLiveNeuralPVSActive;
+    const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
+    const bool wasExportingFrames = mRenderExportFrames;
+    const uint32_t stoppedFrameExportMode = mRenderFrameExportMode;
+    const bool wasPathPlayback = mPreviewPlayback;
+    const uint32_t stoppedExportIndex = mProgressiveExportIndex;
+    const uint32_t stoppedRenderIndex = mRenderSampleIndex;
+
     mStopRequested = false;
     if (!trim(mStopFileText).empty())
     {
         std::error_code removeStopFileError;
         std::filesystem::remove(std::filesystem::path(mStopFileText), removeStopFileError);
     }
-
-    const bool wasProgressiveExport = mProgressiveExportActive;
-    const bool wasLiveNeuralPVS = mLiveNeuralPVSActive;
-    const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
-    const bool wasPathPlayback = mPreviewPlayback;
-    const uint32_t stoppedExportIndex = mProgressiveExportIndex;
-    const uint32_t stoppedRenderIndex = mRenderSampleIndex;
 
     mProgressiveExportActive = false;
     mLiveNeuralPVSActive = false;
@@ -1726,7 +1728,12 @@ void NeuralPVSExporter::stopCurrentMode()
     mRenderPVVFinished = true;
     mRenderPVVCullScene = false;
 
-    if (wasRenderPVV && mRenderFrameExportMode == 1u)
+    if (wasRenderPVV)
+    {
+        cancelRenderPVVRun();
+    }
+
+    if (wasRenderPVV && stoppedFrameExportMode == 1u)
     {
         mRenderVideoFramesReady = mRenderCapturedFrameCount > 0;
     }
@@ -1747,11 +1754,11 @@ void NeuralPVSExporter::stopCurrentMode()
     if (wasRenderPVV)
     {
         mRenderStatus = "RenderPVV stopped at sample " + std::to_string(stoppedRenderIndex);
-        if (mRenderExportFrames && mRenderFrameExportMode == 0u)
+        if (wasExportingFrames && stoppedFrameExportMode == 0u)
         {
             mRenderStatus += ". Frames saved to " + getRenderFrameOutputPath().string();
         }
-        else if (mRenderExportFrames && mRenderFrameExportMode == 1u && mRenderVideoFramesReady)
+        else if (wasExportingFrames && stoppedFrameExportMode == 1u && mRenderVideoFramesReady)
         {
             mRenderStatus += ". Captured frames are staged. Click 'Encode captured video' to write " + getRenderVideoOutputPath().string();
         }
@@ -1764,6 +1771,24 @@ void NeuralPVSExporter::stopCurrentMode()
     }
 
     mLastExportStatus = wasPathPlayback ? "Stopped path playback." : "Nothing is running.";
+}
+
+void NeuralPVSExporter::cancelRenderPVVRun()
+{
+    mRenderPVVActive = false;
+    mRenderPVVCullScene = false;
+    mRenderPVVFinished = true;
+    mRenderExportFrames = false;
+    mPreviewPlayback = false;
+    mPreviewAccumulator = 0.0;
+    mPreviewWallClockValid = false;
+    mRenderLastCapturedSampleIndex = 0xffffffffu;
+    mRenderLoadedSampleIndex = 0xffffffffu;
+    mRenderLoadedVolumeSource = 0xffffffffu;
+    mRenderLoadedVolumePath.clear();
+    mpRenderVolume = nullptr;
+    mRenderSamples.clear();
+    mPreviewSamples.clear();
 }
 
 bool NeuralPVSExporter::shouldStopFromFile() const

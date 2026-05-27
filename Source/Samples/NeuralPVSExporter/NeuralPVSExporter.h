@@ -71,6 +71,7 @@ private:
     bool isModeRunning() const;
     void startSelectedMode();
     void stopCurrentMode();
+    void cancelRenderPVVRun();
     bool shouldStopFromFile() const;
     void startRenderPVVMode();
     void startLiveNeuralPVSMode();
