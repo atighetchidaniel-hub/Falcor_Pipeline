@@ -71,6 +71,7 @@ private:
     bool isModeRunning() const;
     void startSelectedMode();
     void stopCurrentMode();
+    bool shouldStopFromFile() const;
     void startRenderPVVMode();
     void startLiveNeuralPVSMode();
     void updateLiveNeuralPVS(RenderContext* pRenderContext);
@@ -241,6 +242,8 @@ private:
     float mRenderMaxOrthoSize = 80.0f;
     bool mRenderExportFrames = false;
     uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
+    uint32_t mRenderFrameLimit = 0; // 0 = all samples.
+    std::string mStopFileText = "T:/Falcor/neuralpvs_stop.txt";
     bool mRenderPVVActive = false;
     bool mStopRequested = false;
     bool mRenderPVVCullScene = false;

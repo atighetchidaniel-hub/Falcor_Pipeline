@@ -350,7 +350,7 @@ void NeuralPVSExporter::onResize(uint32_t width, uint32_t height) {}
 void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
 {
     bool stoppedAtFrameStart = false;
-    if (mStopRequested)
+    if (mStopRequested || shouldStopFromFile())
     {
         stopCurrentMode();
         stoppedAtFrameStart = true;
@@ -381,6 +381,12 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
     if (mRenderPVVOverlay)
     {
         renderPVVOverlay(pRenderContext, pTargetFbo);
+    }
+
+    if (mStopRequested || shouldStopFromFile())
+    {
+        stopCurrentMode();
+        return;
     }
 
     if (mRenderPVVActive && mRenderPVVCullScene && mRenderExportFrames && mPreviewPlayback && !mRenderPVVFinished)
@@ -537,6 +543,19 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 }
 
                 w.checkbox("Export frames", mRenderExportFrames);
+                w.var("Frame limit (0 = all)", mRenderFrameLimit, 0u, 100000u);
+                w.textbox("Emergency stop file", mStopFileText);
+                if (w.button("Write stop file"))
+                {
+                    const std::filesystem::path stopPath = std::filesystem::path(mStopFileText);
+                    if (!stopPath.parent_path().empty())
+                    {
+                        std::filesystem::create_directories(stopPath.parent_path());
+                    }
+                    std::ofstream stopFile{stopPath};
+                    stopFile << "stop\n";
+                    mStopRequested = true;
+                }
                 Gui::DropdownList frameExportModes = {
                     {0, "Image sequence"},
                     {1, "Lossless video"},
@@ -1614,6 +1633,12 @@ void NeuralPVSExporter::startSelectedMode()
 {
     try
     {
+        if (!trim(mStopFileText).empty())
+        {
+            std::error_code removeStopFileError;
+            std::filesystem::remove(std::filesystem::path(mStopFileText), removeStopFileError);
+        }
+
         const bool unityStyleDepthPVV = mPipelinePreset == 1u;
         mVisibilityMode = unityStyleDepthPVV ? 1u : 0u;
         mVolumeMappingMode = unityStyleDepthPVV ? 1u : 0u;
@@ -1678,6 +1703,11 @@ void NeuralPVSExporter::startSelectedMode()
 void NeuralPVSExporter::stopCurrentMode()
 {
     mStopRequested = false;
+    if (!trim(mStopFileText).empty())
+    {
+        std::error_code removeStopFileError;
+        std::filesystem::remove(std::filesystem::path(mStopFileText), removeStopFileError);
+    }
 
     const bool wasProgressiveExport = mProgressiveExportActive;
     const bool wasLiveNeuralPVS = mLiveNeuralPVSActive;
@@ -1734,6 +1764,15 @@ void NeuralPVSExporter::stopCurrentMode()
     }
 
     mLastExportStatus = wasPathPlayback ? "Stopped path playback." : "Nothing is running.";
+}
+
+bool NeuralPVSExporter::shouldStopFromFile() const
+{
+    if (trim(mStopFileText).empty())
+        return false;
+
+    std::error_code existsError;
+    return std::filesystem::exists(std::filesystem::path(mStopFileText), existsError);
 }
 
 NeuralPVSExporter::ExportSample NeuralPVSExporter::makeCurrentCameraSample() const
@@ -2153,6 +2192,11 @@ void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
         "Saved RenderPVV frame " + std::to_string(mRenderSampleIndex) + " / " +
         std::to_string(mRenderSamples.size() - 1u) + ": " + framePath.string();
     mLastExportStatus = mRenderStatus;
+
+    if (mRenderFrameLimit > 0u && mRenderCapturedFrameCount >= mRenderFrameLimit)
+    {
+        stopCurrentMode();
+    }
 }
 
 void NeuralPVSExporter::finishRenderPVVMode()
