@@ -244,6 +244,8 @@ private:
     bool mRenderExportFrames = false;
     uint32_t mRenderFrameExportMode = 1; // 0 = PNG image sequence, 1 = lossless MKV video.
     uint32_t mRenderFrameLimit = 0; // 0 = all samples.
+    uint32_t mRenderCapturePauseFrames = 2;
+    uint32_t mRenderCapturePauseCountdown = 0;
     std::string mStopFileText = "T:/Falcor/neuralpvs_stop.txt";
     bool mRenderPVVActive = false;
     bool mStopRequested = false;

@@ -391,7 +391,14 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
 
     if (mRenderPVVActive && mRenderPVVCullScene && mRenderExportFrames && mPreviewPlayback && !mRenderPVVFinished)
     {
-        captureRenderFrame(pTargetFbo);
+        if (mRenderCapturePauseCountdown > 0u)
+        {
+            --mRenderCapturePauseCountdown;
+        }
+        else
+        {
+            captureRenderFrame(pTargetFbo);
+        }
     }
 
     if (mProgressiveExportActive)
@@ -544,6 +551,7 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
 
                 w.checkbox("Export frames", mRenderExportFrames);
                 w.var("Frame limit (0 = all)", mRenderFrameLimit, 0u, 100000u);
+                w.var("Capture pause frames", mRenderCapturePauseFrames, 0u, 60u);
                 w.textbox("Emergency stop file", mStopFileText);
                 if (w.button("Write stop file"))
                 {
@@ -1659,6 +1667,7 @@ void NeuralPVSExporter::startSelectedMode()
         mRenderPVVOverlay = false;
         mRenderLastCapturedSampleIndex = 0xffffffffu;
         mRenderCapturedFrameCount = 0;
+        mRenderCapturePauseCountdown = 0;
         mRenderVideoFramesReady = false;
         mStopRequested = false;
 
@@ -1783,6 +1792,7 @@ void NeuralPVSExporter::cancelRenderPVVRun()
     mPreviewAccumulator = 0.0;
     mPreviewWallClockValid = false;
     mRenderLastCapturedSampleIndex = 0xffffffffu;
+    mRenderCapturePauseCountdown = 0;
     mRenderLoadedSampleIndex = 0xffffffffu;
     mRenderLoadedVolumeSource = 0xffffffffu;
     mRenderLoadedVolumePath.clear();
@@ -2079,6 +2089,7 @@ void NeuralPVSExporter::startRenderPVVMode()
     mRenderSampleIndex = 0;
     mRenderLastCapturedSampleIndex = 0xffffffffu;
     mRenderCapturedFrameCount = 0;
+    mRenderCapturePauseCountdown = 0;
     mRenderVideoFramesReady = false;
     mRenderPVVFinished = false;
     mPreviewSamples = mRenderSamples;
@@ -2213,6 +2224,7 @@ void NeuralPVSExporter::captureRenderFrame(const ref<Fbo>& pTargetFbo)
 
     mRenderLastCapturedSampleIndex = mRenderSampleIndex;
     ++mRenderCapturedFrameCount;
+    mRenderCapturePauseCountdown = mRenderCapturePauseFrames;
     mRenderStatus =
         "Saved RenderPVV frame " + std::to_string(mRenderSampleIndex) + " / " +
         std::to_string(mRenderSamples.size() - 1u) + ": " + framePath.string();
