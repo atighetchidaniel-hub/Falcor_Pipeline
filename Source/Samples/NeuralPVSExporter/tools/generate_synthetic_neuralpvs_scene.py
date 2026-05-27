@@ -1148,8 +1148,18 @@ def make_camera_samples(args: argparse.Namespace,
             tx, ty, tz = default_target
 
         fov_s = rng.uniform(args.fov_min, args.fov_max) if args.randomize_camera_fov else args.fov
-        forward = v3_normalize(v3_sub((tx, ty, tz), (px, py, pz)))
-        samples.append(CameraSample(position=(px, py, pz), forward=forward, fov=fov_s))
+        camera_position = (px, py, pz)
+        target_position = (tx, ty, tz)
+        if args.path_position_mode == "viewcell_center":
+            # Unity positions the ViewCell at sceneBounds.center and orients it
+            # toward the randomized camera position. The render camera is not the
+            # GV/PVV sample center.
+            sample_position = default_target
+            forward = v3_normalize(v3_sub(camera_position, sample_position))
+        else:
+            sample_position = camera_position
+            forward = v3_normalize(v3_sub(target_position, camera_position))
+        samples.append(CameraSample(position=sample_position, forward=forward, fov=fov_s))
     return samples
 
 
@@ -1395,6 +1405,7 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
         "ground_objects": args.ground_objects,
         "centered_y_distribution": args.centered_y_distribution,
         "rotation_mode": args.rotation_mode,
+        "path_position_mode": args.path_position_mode,
         "generated_instance_count": len(instances),
         "mesh_counts": mesh_counts,
         "color_count": args.color_count,
@@ -1533,6 +1544,7 @@ def apply_unity_parity_preset(args: argparse.Namespace) -> None:
 
     set_unless_provided(args, flags, "randomize_camera_target", False, "--randomize-camera-target", "--no-randomize-camera-target")
     set_unless_provided(args, flags, "camera_use_scene_bounds", True, "--camera-use-scene-bounds", "--no-camera-use-scene-bounds")
+    set_unless_provided(args, flags, "path_position_mode", "viewcell_center", "--path-position-mode")
     set_unless_provided(args, flags, "clamp_camera_y", False, "--clamp-camera-y", "--no-clamp-camera-y")
     set_unless_provided(args, flags, "camera_min_distance", 5.0, "--camera-min-distance")
 
@@ -1663,6 +1675,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--camera-target-offset-x",    type=float, default=2.0)
     p.add_argument("--camera-target-offset-z",    type=float, default=2.0)
     p.add_argument("--camera-use-scene-bounds",   action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--path-position-mode", choices=["camera", "viewcell_center"], default="camera",
+                   help="What CSV x/y/z means. 'camera' is the old Falcor path behavior. "
+                        "'viewcell_center' matches Unity's RuntimeSceneGenerator handoff, "
+                        "where the ViewCell center is sceneBounds.center and its rotation points "
+                        "toward the randomized render camera.")
     p.add_argument("--clamp-camera-y",            action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--randomize-camera-fov",      action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--fov-min",               type=float, default=45.0)
