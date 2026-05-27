@@ -349,13 +349,18 @@ void NeuralPVSExporter::onResize(uint32_t width, uint32_t height) {}
 
 void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
 {
+    bool stoppedAtFrameStart = false;
     if (mStopRequested)
     {
         stopCurrentMode();
+        stoppedAtFrameStart = true;
     }
 
     const float4 clearColor(0.08f, 0.10f, 0.12f, 1.0f);
     pRenderContext->clearFbo(pTargetFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::All);
+
+    if (stoppedAtFrameStart)
+        return;
 
     if (mProgressiveExportActive && !mProgressiveExportSamples.empty())
     {
@@ -704,6 +709,12 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     {
         mStopRequested = true;
         stopCurrentMode();
+    }
+    if (w.button("Stop and close Falcor"))
+    {
+        mStopRequested = true;
+        stopCurrentMode();
+        shutdown(0);
     }
 
     w.separator();
@@ -1687,8 +1698,7 @@ void NeuralPVSExporter::stopCurrentMode()
 
     if (wasRenderPVV && mRenderFrameExportMode == 1u)
     {
-        removeDirectoryQuietly(getRenderFrameStagingPath());
-        mRenderVideoFramesReady = false;
+        mRenderVideoFramesReady = mRenderCapturedFrameCount > 0;
     }
 
     if (wasProgressiveExport)
@@ -1706,9 +1716,19 @@ void NeuralPVSExporter::stopCurrentMode()
 
     if (wasRenderPVV)
     {
-        mRenderStatus =
-            "RenderPVV stopped at sample " + std::to_string(stoppedRenderIndex) +
-            (mRenderExportFrames && mRenderFrameExportMode == 0u ? ". Frames saved to " + getRenderFrameOutputPath().string() : ".");
+        mRenderStatus = "RenderPVV stopped at sample " + std::to_string(stoppedRenderIndex);
+        if (mRenderExportFrames && mRenderFrameExportMode == 0u)
+        {
+            mRenderStatus += ". Frames saved to " + getRenderFrameOutputPath().string();
+        }
+        else if (mRenderExportFrames && mRenderFrameExportMode == 1u && mRenderVideoFramesReady)
+        {
+            mRenderStatus += ". Captured frames are staged. Click 'Encode captured video' to write " + getRenderVideoOutputPath().string();
+        }
+        else
+        {
+            mRenderStatus += ".";
+        }
         mLastExportStatus = mRenderStatus;
         return;
     }
