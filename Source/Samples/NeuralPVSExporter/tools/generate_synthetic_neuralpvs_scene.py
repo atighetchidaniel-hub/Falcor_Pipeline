@@ -953,6 +953,22 @@ def select_mesh(rng: random.Random, args: argparse.Namespace,
     return "capsule"
 
 
+def choose_color_index(rng: random.Random, args: argparse.Namespace, mesh: str,
+                       color_count: int, reserved_colors: int) -> int:
+    """Choose an instance material color.
+
+    Falcor's pyscene importer creates a separate mesh entry for every
+    addTriangleMesh(meshBuilder, material) call. Keeping one stable material per
+    GLB mesh avoids duplicating the same GLB triangle data across many random
+    colors, which has proven much more robust for large generated batches.
+    """
+    if getattr(args, "glb_single_materials", False) and mesh.startswith("glb_"):
+        usable_colors = max(1, color_count - reserved_colors)
+        h = sum((i + 1) * ord(ch) for i, ch in enumerate(mesh))
+        return reserved_colors + (h % usable_colors)
+    return rng.randint(reserved_colors, color_count - 1)
+
+
 def make_instances(args: argparse.Namespace,
                    glb_models: Optional[List[GlbModel]] = None):
     """Returns (instances, clusters, zones, colors).
@@ -1047,7 +1063,7 @@ def make_instances(args: argparse.Namespace,
             rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 20))
 
         reserved_colors = 2 if (args.fixed_floor or args.boundary_walls or args.wall_count > 0) else 0
-        cidx = rng.randint(reserved_colors, len(colors) - 1)
+        cidx = choose_color_index(rng, args, mesh, len(colors), reserved_colors)
 
         instances.append(Instance(
             name=f"object_{len(placed):04d}",
@@ -1093,7 +1109,7 @@ def make_instances(args: argparse.Namespace,
                     rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 20))
 
                 reserved_colors = 2 if (args.fixed_floor or args.boundary_walls or args.wall_count > 0) else 0
-                cidx = rng.randint(reserved_colors, len(colors) - 1)
+                cidx = choose_color_index(rng, args, mesh, len(colors), reserved_colors)
                 instances.append(Instance(
                     name=f"object_{len(placed):04d}",
                     mesh=mesh, color_idx=cidx,
@@ -1531,6 +1547,8 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
         "generated_instance_count": len(instances),
         "mesh_counts": mesh_counts,
         "color_count": args.color_count,
+        "glb_single_materials": args.glb_single_materials,
+        "mesh_id_count": len({(inst.mesh, inst.color_idx) for inst in instances}),
         "cluster_count": len(clusters),
         "boolean_zone_count": len(zones),
         "boolean_zones": [
@@ -1663,6 +1681,7 @@ def apply_unity_parity_preset(args: argparse.Namespace) -> None:
     set_unless_provided(args, flags, "rotation_mode", "full", "--rotation-mode")
     set_unless_provided(args, flags, "use_glb_models", True, "--use-glb-models", "--no-use-glb-models")
     set_unless_provided(args, flags, "glb_model_weight", 1.0, "--glb-model-weight")
+    set_unless_provided(args, flags, "glb_single_materials", True, "--glb-single-materials", "--no-glb-single-materials")
 
     set_unless_provided(args, flags, "randomize_camera_target", False, "--randomize-camera-target", "--no-randomize-camera-target")
     set_unless_provided(args, flags, "camera_use_scene_bounds", True, "--camera-use-scene-bounds", "--no-camera-use-scene-bounds")
@@ -1720,6 +1739,10 @@ def parse_args() -> argparse.Namespace:
                    help="Probability [0,1] that each scatter object is chosen from the GLB library "
                         "rather than built-in primitives. Default 1.0 uses GLB models for all scatter "
                         "objects when a library is enabled. Set lower to mix GLB with primitives.")
+    p.add_argument("--glb-single-materials", action=argparse.BooleanOptionalAction, default=False,
+                   help="Use one stable material per GLB mesh key. This keeps generated pyscenes much "
+                        "smaller and avoids duplicating GLB triangle meshes for every random color. "
+                        "Enabled automatically by --unity-parity unless explicitly disabled.")
 
     # Mesh-type probabilities (capsule = remainder up to 1.0)
     p.add_argument("--cube-probability",     type=float, default=0.40)

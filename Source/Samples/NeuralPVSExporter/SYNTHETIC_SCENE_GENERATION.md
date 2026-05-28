@@ -4,7 +4,7 @@ This folder contains a Falcor sample that exports NeuralPVS-style geometry volum
 
 ## What The Generator Adds
 
-`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes that the exporter can convert into GV inputs and PVV ground-truth targets. The default mode is Falcor-native and can include floors, boundary geometry, wall segments, primitive meshes, and boolean clearing zones. The `--unity-parity` preset instead mirrors Unity's `RuntimeSceneGenerator` defaults more closely: GLB models, 50-150 objects unless overridden, centered 3D object placement, full-3D spacing, uniform scale `0.5..2.0`, no extra Falcor floor/walls/boolean zones, and moving view-cell samples from generated scene bounds.
+`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes that the exporter can convert into GV inputs and PVV ground-truth targets. The default mode is Falcor-native and can include floors, boundary geometry, wall segments, primitive meshes, and boolean clearing zones. The `--unity-parity` preset instead mirrors Unity's `RuntimeSceneGenerator` defaults more closely: GLB models, 50-150 objects unless overridden, centered 3D object placement, full-3D spacing, uniform scale `0.5..2.0`, no extra Falcor floor/walls/boolean zones, stable one-material-per-GLB mesh emission for Falcor import robustness, and moving view-cell samples from generated scene bounds.
 
 The script also writes a camera path CSV. Each row defines one viewcell/camera sample:
 
@@ -53,6 +53,8 @@ Use `--object-count 200` if you intentionally want a fixed 200-object stress tes
 
 In Unity-parity mode the CSV sample position is a moving ViewCell center inside/near the generated scene bounds. This is deliberately kept for the current Falcor ray/world pipeline because CSV `x,y,z` is both the ViewCell center and the World-AABB volume center; using the outside orbit camera here is only correct for Unity-projection style exports.
 
+Unity-parity mode also enables `--glb-single-materials` by default. This keeps one stable material per GLB mesh instead of creating a separate Falcor `addTriangleMesh()` entry for every random colour. The geometry distribution and GV/PVV labels are unchanged, but large batches are much less likely to hit Falcor mesh-import/index-buffer failures.
+
 For closer Unity synthetic-training parity, generate multiple fresh scene parts instead of one scene with all samples:
 
 ```bash
@@ -64,6 +66,20 @@ python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_batc
   --samples-per-scene 10 \
   --radius 30 \
   --glb-dir /path/to/Unity/Assets/models
+```
+
+If a generated part still stresses Falcor's importer, keep the same batch structure but cap the sampled Unity object count slightly and mix in a few primitives:
+
+```bash
+python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_batch.py \
+  --out-dir data/neuralpvs_synthetic \
+  --name synth_train_1000_r30_batch_safe \
+  --seed 30030 \
+  --scene-count 100 \
+  --samples-per-scene 10 \
+  --radius 30 \
+  --glb-dir /path/to/Unity/Assets/models \
+  -- --object-count-max 120 --glb-model-weight 0.8
 ```
 
 For the most Unity-like distribution, use one fresh scene per sample. This creates more files, but it avoids reusing one object layout for many training samples:
