@@ -53,6 +53,31 @@ Use `--object-count 200` if you intentionally want a fixed 200-object stress tes
 
 In Unity-parity mode the CSV sample position is now a moving ViewCell center inside/near the generated scene bounds. This matches Unity's runtime controller more closely: the generator can initially aim at the scene center, but the active ViewCell is refreshed from the camera whenever the camera leaves the current cell. Keeping every CSV row fixed at `sceneBounds.center` made the GV nearly identical for all samples, which is not useful for NeuralPVS training.
 
+For closer Unity synthetic-training parity, generate multiple fresh scene parts instead of one scene with all samples:
+
+```bash
+python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_batch.py \
+  --out-dir data/neuralpvs_synthetic \
+  --name synth_train_1000_r30_batch \
+  --seed 30030 \
+  --scene-count 10 \
+  --samples-per-scene 100 \
+  --radius 30 \
+  --glb-dir /path/to/Unity/Assets/models
+```
+
+Export every part listed in the generated `_export_plan.csv`, then merge those exported part datasets:
+
+```bash
+python3 Source/Samples/NeuralPVSExporter/tools/merge_neuralpvs_datasets.py \
+  --plan data/neuralpvs_synthetic/synth_train_1000_r30_batch/synth_train_1000_r30_batch_export_plan.csv \
+  --source-root neuralpvs_export_test/datasets \
+  --output-root /var/tmp/atighedl_runs/neuralpvs_falcor_local/datasets \
+  --dataset-name falcor_synth_train_1000_r30_batch \
+  --link \
+  --overwrite
+```
+
 ## Export GV/PVV In Falcor
 
 Open the `NeuralPVSExporter` sample and set:
