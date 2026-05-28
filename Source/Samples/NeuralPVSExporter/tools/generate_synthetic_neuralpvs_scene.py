@@ -962,11 +962,12 @@ def choose_color_index(rng: random.Random, args: argparse.Namespace, mesh: str,
     GLB mesh avoids duplicating the same GLB triangle data across many random
     colors, which has proven much more robust for large generated batches.
     """
+    random_color_idx = rng.randint(reserved_colors, color_count - 1)
     if getattr(args, "glb_single_materials", False) and mesh.startswith("glb_"):
         usable_colors = max(1, color_count - reserved_colors)
         h = sum((i + 1) * ord(ch) for i, ch in enumerate(mesh))
         return reserved_colors + (h % usable_colors)
-    return rng.randint(reserved_colors, color_count - 1)
+    return random_color_idx
 
 
 def make_instances(args: argparse.Namespace,
