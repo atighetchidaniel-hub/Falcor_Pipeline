@@ -226,8 +226,13 @@ bool isInsideRayCameraFrustum(float3 origin, float3 voxelWorld)
 
 float3 rayVolume01ToWorld(float3 voxel01)
 {
+    // Stored NeuralPVS volume coordinates use the same swapxy convention as
+    // GV/PVV writes. swapxy is its own inverse, so convert back before mapping
+    // a stored voxel coordinate to world space for ray visibility tests.
+    float3 volume01 = applyNeuralPVSVolumeConvention(voxel01);
+
     if (gRayUseProjectionVolume == 0u)
-        return gRaySceneMin + voxel01 * gRaySceneExtent;
+        return gRaySceneMin + volume01 * gRaySceneExtent;
 
     // Invert the depth encoding used during GV generation.
     // Linear-Z forward:  z = (depth + near) / (far - near)  → inverse: depth = z*(far-near) - near
@@ -235,16 +240,16 @@ float3 rayVolume01ToWorld(float3 voxel01)
     float depth;
     if (gRayLinearZ != 0u)
     {
-        depth = voxel01.z * (gRayViewCellFarPlane - gRayViewCellNearPlane) - gRayViewCellNearPlane;
+        depth = volume01.z * (gRayViewCellFarPlane - gRayViewCellNearPlane) - gRayViewCellNearPlane;
     }
     else
     {
         float S    = gRayLogDepthScale;
         float denom = log2(S * (gRayViewCellFarPlane / gRayViewCellNearPlane) + 1.0f);
-        depth = gRayViewCellNearPlane * (exp2(voxel01.z * denom) - 1.0f) / max(1e-9f, S);
+        depth = gRayViewCellNearPlane * (exp2(volume01.z * denom) - 1.0f) / max(1e-9f, S);
     }
-    float xNdc = voxel01.x * 2.0f - 1.0f;
-    float yNdc = voxel01.y * 2.0f - 1.0f;
+    float xNdc = volume01.x * 2.0f - 1.0f;
+    float yNdc = volume01.y * 2.0f - 1.0f;
 
     return gRayViewCellPosition +
         rayNormalizedOrFallback(gRayViewCellForward, float3(0.f, 0.f, -1.f)) * depth +
