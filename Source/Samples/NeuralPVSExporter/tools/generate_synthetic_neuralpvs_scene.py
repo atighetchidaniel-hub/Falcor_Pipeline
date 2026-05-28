@@ -1584,6 +1584,9 @@ def write_manifest(path: Path, args: argparse.Namespace, scene_path: Path, csv_p
             "linear_z": args.linear_z,
             "log_depth_scale": args.log_depth_scale,
             "unity_fov_expansion_degrees": args.unity_fov_expansion_degrees,
+            "gv_dilation_radius": 0,
+            "pvv_dilation_radius": 0,
+            "pvv_surface_targets": False,
         },
         "glb_models": [
             {"name": m.name, "key": m.key, "category": m.category,

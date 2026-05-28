@@ -209,7 +209,7 @@ private:
     float mMaxOrthoSize = 80.0f;
     uint32_t mGVDilationRadius = 0;
     uint32_t mPVVDilationRadius = 0;
-    bool mPVVSurfaceTargets = true;
+    bool mPVVSurfaceTargets = false;
 
     std::string mLiveDatasetRootText = "T:/Falcor/neuralpvs_export_test/live/falcor_live_neuralpvs";
     std::string mLivePythonExeText = "python";

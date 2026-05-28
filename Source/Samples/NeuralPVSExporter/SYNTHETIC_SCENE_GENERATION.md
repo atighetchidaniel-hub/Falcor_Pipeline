@@ -137,6 +137,8 @@ Open the `NeuralPVSExporter` sample and set:
 | Sampling factor | `2`, matching Unity's default supersampling factor for GV/PVV generation cameras |
 | Linear Z / Log depth scale | `Linear Z = true` and `0.01`, matching Unity's default volume settings |
 | Unity FOV expansion | `30`, matching the extra FOV applied by Unity's generated viewcell cameras |
+| GV / PVV dilation radius | `0 / 0` for exact labels |
+| PVV surface targets | Off, so ray PVV tests voxel centers only instead of making labels overly conservative |
 | High-detail GV cameras | Optional; when enabled, Falcor also renders the Unity-style front, side, and top orthographic GV cameras |
 
 The exporter writes a dataset folder containing `gv/`, `pvv/`, `predicted_pvv/`, and `metadata.json`. The `predicted_pvv/` folder is only a convenience copy of the ground-truth PVV at export time. It is not a neural network prediction. True predicted PVVs should be produced later by the adapted fVDB backend.
