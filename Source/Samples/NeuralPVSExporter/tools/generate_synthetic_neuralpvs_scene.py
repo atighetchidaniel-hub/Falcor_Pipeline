@@ -10,6 +10,7 @@ Unity-style synthetic scene features inspired by Unity's RuntimeSceneGenerator:
   - Boolean clearing zones (tunnels / roads / spherical cavities) that remove objects they overlap
   - Random thin environmental planes around the scene
   - Orbit-based camera sampling with randomised distance, height, tilt, target offset, and FOV
+  - Moving scene view-cell sampling for Unity-parity training data
   - Optional Unity-parity preset matching RuntimeSceneGenerator defaults as closely as Falcor allows
 
 The generated .pyscene file can be loaded by the NeuralPVSExporter sample.
@@ -64,6 +65,14 @@ def v3_length(a: Vec3) -> float:
 def v3_normalize(a: Vec3, fallback: Vec3 = (0.0, 0.0, -1.0)) -> Vec3:
     l = v3_length(a)
     return (a[0] / l, a[1] / l, a[2] / l) if l > 1e-6 else fallback
+
+
+def v3_lerp(a: Vec3, b: Vec3, t: float) -> Vec3:
+    return (
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    )
 
 
 # 3x3 rotation matrix (row-major, 9 floats)
@@ -1104,6 +1113,40 @@ def compute_scene_bounds(instances: List[Instance],
 # Camera sampling  (orbit-based, matching Unity's PositionCameraRandomly)
 # ---------------------------------------------------------------------------
 
+def _inner_range(lo: float, hi: float, margin: float) -> Tuple[float, float]:
+    if hi < lo:
+        lo, hi = hi, lo
+    extent = hi - lo
+    if extent <= 2.0 * margin:
+        return lo, hi
+    return lo + margin, hi - margin
+
+
+def _sample_in_scene_bounds(rng: random.Random,
+                            scene_bounds: SceneBounds,
+                            view_cell_radius: float) -> Vec3:
+    """Sample a moving view-cell center inside/near generated scene bounds.
+
+    Unity's runtime ViewCell is refreshed from the active camera when the camera
+    leaves the current cell. For synthetic training this means the CSV center
+    should move through the generated scene instead of staying at one fixed
+    scene-center point.
+    """
+    sx, sy, sz = scene_bounds.size
+    # Keep samples away from the exact AABB faces, but do not collapse tiny scenes.
+    mx = min(max(view_cell_radius * 2.0, sx * 0.05), sx * 0.25)
+    my = min(max(view_cell_radius * 2.0, sy * 0.05), sy * 0.25)
+    mz = min(max(view_cell_radius * 2.0, sz * 0.05), sz * 0.25)
+    x0, x1 = _inner_range(scene_bounds.min_corner[0], scene_bounds.max_corner[0], mx)
+    y0, y1 = _inner_range(scene_bounds.min_corner[1], scene_bounds.max_corner[1], my)
+    z0, z1 = _inner_range(scene_bounds.min_corner[2], scene_bounds.max_corner[2], mz)
+    return (
+        rng.uniform(x0, x1),
+        rng.uniform(y0, y1),
+        rng.uniform(z0, z1),
+    )
+
+
 def make_camera_samples(args: argparse.Namespace,
                         scene_bounds: Optional[SceneBounds] = None) -> List[CameraSample]:
     rng = random.Random(args.seed + 9173)
@@ -1156,6 +1199,34 @@ def make_camera_samples(args: argparse.Namespace,
             # GV/PVV sample center.
             sample_position = default_target
             forward = v3_normalize(v3_sub(camera_position, sample_position))
+        elif args.path_position_mode == "moving_viewcell":
+            if scene_bounds is not None:
+                sample_position = _sample_in_scene_bounds(rng, scene_bounds, args.view_cell_radius)
+            else:
+                fallback_bounds = SceneBounds(
+                    center=center,
+                    size=(bx, by, bz),
+                    min_corner=(center[0] - bx * 0.5, center[1] - by * 0.5, center[2] - bz * 0.5),
+                    max_corner=(center[0] + bx * 0.5, center[1] + by * 0.5, center[2] + bz * 0.5),
+                )
+                sample_position = _sample_in_scene_bounds(rng, fallback_bounds, args.view_cell_radius)
+
+            # Look mostly toward the scene center, with optional target jitter.
+            # This mirrors Unity's LookAt(sceneBounds.center) behavior while still
+            # letting the view-cell center itself move through the scene.
+            if args.randomize_camera_target:
+                jitter = (
+                    rng.uniform(-0.25 * bx, 0.25 * bx),
+                    rng.uniform(-0.25 * by, 0.25 * by),
+                    rng.uniform(-0.25 * bz, 0.25 * bz),
+                )
+                target_position = v3_add(default_target, jitter)
+            else:
+                target_position = default_target
+
+            if v3_length(v3_sub(target_position, sample_position)) < max(args.view_cell_radius, 1e-3):
+                target_position = v3_lerp(sample_position, camera_position, 0.5)
+            forward = v3_normalize(v3_sub(target_position, sample_position))
         else:
             sample_position = camera_position
             forward = v3_normalize(v3_sub(target_position, camera_position))
@@ -1544,7 +1615,7 @@ def apply_unity_parity_preset(args: argparse.Namespace) -> None:
 
     set_unless_provided(args, flags, "randomize_camera_target", False, "--randomize-camera-target", "--no-randomize-camera-target")
     set_unless_provided(args, flags, "camera_use_scene_bounds", True, "--camera-use-scene-bounds", "--no-camera-use-scene-bounds")
-    set_unless_provided(args, flags, "path_position_mode", "viewcell_center", "--path-position-mode")
+    set_unless_provided(args, flags, "path_position_mode", "moving_viewcell", "--path-position-mode")
     set_unless_provided(args, flags, "clamp_camera_y", False, "--clamp-camera-y", "--no-clamp-camera-y")
     set_unless_provided(args, flags, "camera_min_distance", 5.0, "--camera-min-distance")
 
@@ -1675,11 +1746,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--camera-target-offset-x",    type=float, default=2.0)
     p.add_argument("--camera-target-offset-z",    type=float, default=2.0)
     p.add_argument("--camera-use-scene-bounds",   action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument("--path-position-mode", choices=["camera", "viewcell_center"], default="camera",
+    p.add_argument("--path-position-mode", choices=["camera", "viewcell_center", "moving_viewcell"], default="camera",
                    help="What CSV x/y/z means. 'camera' is the old Falcor path behavior. "
-                        "'viewcell_center' matches Unity's RuntimeSceneGenerator handoff, "
-                        "where the ViewCell center is sceneBounds.center and its rotation points "
-                        "toward the randomized render camera.")
+                        "'viewcell_center' keeps the ViewCell fixed at sceneBounds.center. "
+                        "'moving_viewcell' samples ViewCell centers inside/near generated "
+                        "scene bounds and points them toward the scene, matching Unity's "
+                        "runtime behavior where the ViewCell follows the active camera.")
     p.add_argument("--clamp-camera-y",            action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--randomize-camera-fov",      action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--fov-min",               type=float, default=45.0)

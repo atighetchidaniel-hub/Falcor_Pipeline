@@ -4,7 +4,7 @@ This folder contains a Falcor sample that exports NeuralPVS-style geometry volum
 
 ## What The Generator Adds
 
-`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes that the exporter can convert into GV inputs and PVV ground-truth targets. The default mode is Falcor-native and can include floors, boundary geometry, wall segments, primitive meshes, and boolean clearing zones. The `--unity-parity` preset instead mirrors Unity's `RuntimeSceneGenerator` defaults more closely: GLB models, 50-150 objects unless overridden, centered 3D object placement, uniform scale `0.5..2.0`, no extra Falcor floor/walls/boolean zones, and camera/view-cell placement from generated scene bounds.
+`tools/generate_synthetic_neuralpvs_scene.py` creates randomized scenes that the exporter can convert into GV inputs and PVV ground-truth targets. The default mode is Falcor-native and can include floors, boundary geometry, wall segments, primitive meshes, and boolean clearing zones. The `--unity-parity` preset instead mirrors Unity's `RuntimeSceneGenerator` defaults more closely: GLB models, 50-150 objects unless overridden, centered 3D object placement, uniform scale `0.5..2.0`, no extra Falcor floor/walls/boolean zones, and moving view-cell samples from generated scene bounds.
 
 The script also writes a camera path CSV. Each row defines one viewcell/camera sample:
 
@@ -51,7 +51,7 @@ python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_scen
 
 Use `--object-count 200` if you intentionally want a fixed 200-object stress test; otherwise `--unity-parity` samples the object count from Unity's default `50..150` range.
 
-In Unity-parity mode the CSV sample position is the Unity-style ViewCell center (`sceneBounds.center`), not the randomized orbit render camera position. The forward vector still changes per sample by pointing the ViewCell toward each randomized camera position. This avoids empty training samples caused by placing the GV/PVV volume outside the generated object cloud.
+In Unity-parity mode the CSV sample position is now a moving ViewCell center inside/near the generated scene bounds. This matches Unity's runtime controller more closely: the generator can initially aim at the scene center, but the active ViewCell is refreshed from the camera whenever the camera leaves the current cell. Keeping every CSV row fixed at `sceneBounds.center` made the GV nearly identical for all samples, which is not useful for NeuralPVS training.
 
 ## Export GV/PVV In Falcor
 
