@@ -362,6 +362,23 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
     if (stoppedAtFrameStart)
         return;
 
+    if (mBatchStartPartPending && mBatchExportActive && !mProgressiveExportActive)
+    {
+        try
+        {
+            mBatchStartPartPending = false;
+            startBatchExportPart();
+        }
+        catch (const std::exception& e)
+        {
+            mBatchStartPartPending = false;
+            mBatchExportActive = false;
+            mProgressiveExportActive = false;
+            mBatchExportStatus = "Batch export stopped: " + std::string(e.what());
+            mLastExportStatus = mBatchExportStatus;
+        }
+    }
+
     if (mProgressiveExportActive && !mProgressiveExportSamples.empty())
     {
         mPreviewSampleIndex = std::min(mProgressiveExportIndex, uint32_t(mProgressiveExportSamples.size() - 1u));
@@ -838,6 +855,8 @@ void NeuralPVSExporter::onHotReload(HotReloadFlags reloaded) {}
 
 void NeuralPVSExporter::loadScene(const std::filesystem::path& path)
 {
+    releaseSceneResources();
+
     mpScene = Scene::create(getDevice(), path);
     mpCamera = mpScene->getCamera();
 
@@ -849,6 +868,33 @@ void NeuralPVSExporter::loadScene(const std::filesystem::path& path)
         mpCamera->setFocalLength(18.0f);
         mpCamera->setAspectRatio(float(mRasterWidth) / float(mRasterHeight));
     }
+}
+
+void NeuralPVSExporter::releaseSceneResources()
+{
+    getDevice()->wait();
+
+    mpPVVRenderPass = nullptr;
+    mpPVVRayPass = nullptr;
+    mpPVVPass = nullptr;
+    mpPVVDepthPass = nullptr;
+    mpGVPass = nullptr;
+    mpPreviewPass = nullptr;
+
+    mpPVVDepthFbo = nullptr;
+    mpGVFbo = nullptr;
+    mpRenderVolume = nullptr;
+    mpPVVVolume = nullptr;
+    mpGVVolume = nullptr;
+
+    mpCamera = nullptr;
+    mpScene = nullptr;
+
+    mRenderLoadedSampleIndex = 0xffffffffu;
+    mRenderLoadedVolumeSource = 0xffffffffu;
+    mRenderLoadedVolumePath.clear();
+
+    getDevice()->wait();
 }
 
 void NeuralPVSExporter::createResources()
@@ -1774,6 +1820,7 @@ void NeuralPVSExporter::startBatchExport()
 {
     loadBatchExportPlan();
     mBatchExportActive = true;
+    mBatchStartPartPending = false;
     mBatchExportIndex = 0;
     mOutputRoot = std::filesystem::path(mOutputRootText);
     mExportMode = 2;
@@ -1785,12 +1832,15 @@ void NeuralPVSExporter::startBatchExport()
 
 void NeuralPVSExporter::startBatchExportPart()
 {
+    mBatchStartPartPending = false;
+
     if (!mBatchExportActive)
         return;
 
     if (mBatchExportIndex >= mBatchExportParts.size())
     {
         mBatchExportActive = false;
+        mBatchStartPartPending = false;
         mBatchExportStatus = "Batch export complete: " + std::to_string(mBatchExportParts.size()) + " parts exported.";
         mLastExportStatus = mBatchExportStatus;
         return;
@@ -1926,6 +1976,7 @@ void NeuralPVSExporter::stopCurrentMode()
 
     mProgressiveExportActive = false;
     mBatchExportActive = false;
+    mBatchStartPartPending = false;
     mLiveNeuralPVSActive = false;
     mLiveHasPrediction = false;
     mPreviewPlayback = false;
@@ -2720,6 +2771,7 @@ void NeuralPVSExporter::finishProgressiveExport()
         if (mBatchExportIndex >= mBatchExportParts.size())
         {
             mBatchExportActive = false;
+            mBatchStartPartPending = false;
             mBatchExportStatus =
                 "Batch export complete: " + std::to_string(mBatchExportParts.size()) +
                 " parts exported. Last dataset: " + completedDataset + ".";
@@ -2732,17 +2784,7 @@ void NeuralPVSExporter::finishProgressiveExport()
                 std::to_string(mBatchExportIndex + 1u) + " / " +
                 std::to_string(mBatchExportParts.size()) + ".";
             mLastExportStatus = mBatchExportStatus;
-            try
-            {
-                startBatchExportPart();
-            }
-            catch (const std::exception& e)
-            {
-                mBatchExportActive = false;
-                mProgressiveExportActive = false;
-                mBatchExportStatus = "Batch export stopped: " + std::string(e.what());
-                mLastExportStatus = mBatchExportStatus;
-            }
+            mBatchStartPartPending = true;
         }
     }
 }

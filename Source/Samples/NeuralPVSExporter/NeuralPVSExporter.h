@@ -62,6 +62,7 @@ private:
     };
 
     void loadScene(const std::filesystem::path& path);
+    void releaseSceneResources();
     void createResources();
     void createPreviewPass();
     void createGVPass();
@@ -293,6 +294,7 @@ private:
     std::vector<uint64_t> mProgressiveGVBitCounts;
     std::vector<uint64_t> mProgressivePVVBitCounts;
     bool mBatchExportActive = false;
+    bool mBatchStartPartPending = false;
     uint32_t mBatchExportIndex = 0;
     std::vector<BatchExportPart> mBatchExportParts;
     std::string mBatchExportStatus = "Batch export idle.";
