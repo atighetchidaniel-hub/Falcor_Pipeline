@@ -16,7 +16,16 @@ using namespace Falcor;
 class NeuralPVSExporter : public SampleApp
 {
 public:
+    struct CommandLineOptions
+    {
+        std::string batchPlanCsv;
+        std::string outputRoot;
+        bool autoStartBatch = false;
+        bool exitWhenDone = false;
+    };
+
     NeuralPVSExporter(const SampleAppConfig& config);
+    NeuralPVSExporter(const SampleAppConfig& config, const CommandLineOptions& options);
     ~NeuralPVSExporter();
 
     void onLoad(RenderContext* pRenderContext) override;
@@ -295,6 +304,8 @@ private:
     std::vector<uint64_t> mProgressivePVVBitCounts;
     bool mBatchExportActive = false;
     bool mBatchStartPartPending = false;
+    bool mBatchAutoStartRequested = false;
+    bool mExitWhenBatchDone = false;
     uint32_t mBatchExportIndex = 0;
     std::vector<BatchExportPart> mBatchExportParts;
     std::string mBatchExportStatus = "Batch export idle.";

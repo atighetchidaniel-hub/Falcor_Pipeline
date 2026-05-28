@@ -97,6 +97,19 @@ python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_batc
 
 Load the generated `_export_plan.csv` in NeuralPVSExporter under **Batch Export Plan** and click **Start batch export**. Falcor will load each listed scene/path pair and export every part automatically. Then merge those exported part datasets:
 
+For long batches, prefer the command-line chunk runner so each chunk gets a fresh Falcor process instead of accumulating many scene imports in one run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Source\Samples\NeuralPVSExporter\tools\run_neuralpvs_batch_chunks.ps1 `
+  -Plan T:\Falcor\media\SyntheticNeuralPVS\synth_train_1000_r30_aggressive_v3\synth_train_1000_r30_aggressive_v3_export_plan.csv `
+  -FalcorRoot T:\Falcor `
+  -SourceRoot T:\Falcor\neuralpvs_export_test\datasets `
+  -OutputRoot T:\Falcor\neuralpvs_export_test\datasets `
+  -ChunkSize 10
+```
+
+The runner skips already complete parts, writes plain chunk CSVs, launches `NeuralPVSExporter.exe --batch-plan <chunk> --auto-start-batch --exit-when-done`, and waits for each process to exit before starting the next chunk.
+
 ```bash
 python3 Source/Samples/NeuralPVSExporter/tools/merge_neuralpvs_datasets.py \
   --plan data/neuralpvs_synthetic/synth_train_1000_r30_batch/synth_train_1000_r30_batch_export_plan.csv \

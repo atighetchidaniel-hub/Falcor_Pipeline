@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
@@ -327,9 +328,95 @@ namespace
         std::error_code ec;
         std::filesystem::remove_all(path, ec);
     }
+
+    bool optionMatches(const std::string& arg, const char* longName, const char* shortName = nullptr)
+    {
+        return arg == longName || (shortName && arg == shortName);
+    }
+
+    std::string requireOptionValue(int argc, char** argv, int& index, const std::string& option)
+    {
+        if (index + 1 >= argc)
+            FALCOR_THROW("Missing value for command-line option '{}'.", option);
+        return argv[++index];
+    }
+
+    void printCommandLineUsage()
+    {
+        std::cout
+            << "NeuralPVSExporter command-line options:\n"
+            << "  --batch-plan <csv>       Preload a batch export plan CSV.\n"
+            << "  --output-root <dir>      Override the dataset output root.\n"
+            << "  --auto-start-batch       Start the loaded batch plan after startup.\n"
+            << "  --exit-when-done         Exit the app when the batch completes or fails.\n"
+            << "  --headless               Run without a window/UI.\n"
+            << "  --no-ui                  Hide the UI.\n"
+            << "  --help                   Print this help text.\n";
+    }
+
+    NeuralPVSExporter::CommandLineOptions parseCommandLineOptions(int argc, char** argv, SampleAppConfig& config, bool& showHelp)
+    {
+        NeuralPVSExporter::CommandLineOptions options;
+        showHelp = false;
+
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+            if (optionMatches(arg, "--help", "-h"))
+            {
+                showHelp = true;
+            }
+            else if (optionMatches(arg, "--batch-plan", "--plan"))
+            {
+                options.batchPlanCsv = requireOptionValue(argc, argv, i, arg);
+            }
+            else if (optionMatches(arg, "--output-root"))
+            {
+                options.outputRoot = requireOptionValue(argc, argv, i, arg);
+            }
+            else if (optionMatches(arg, "--auto-start-batch"))
+            {
+                options.autoStartBatch = true;
+            }
+            else if (optionMatches(arg, "--exit-when-done"))
+            {
+                options.exitWhenDone = true;
+            }
+            else if (optionMatches(arg, "--headless"))
+            {
+                config.headless = true;
+                config.showUI = false;
+            }
+            else if (optionMatches(arg, "--no-ui"))
+            {
+                config.showUI = false;
+            }
+            else
+            {
+                FALCOR_THROW("Unknown NeuralPVSExporter command-line option '{}'. Use --help for usage.", arg);
+            }
+        }
+
+        return options;
+    }
 }
 
-NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config) : SampleApp(config) {}
+NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config) : NeuralPVSExporter(config, CommandLineOptions()) {}
+
+NeuralPVSExporter::NeuralPVSExporter(const SampleAppConfig& config, const CommandLineOptions& options) : SampleApp(config)
+{
+    if (!options.batchPlanCsv.empty())
+        mBatchPlanCsvText = options.batchPlanCsv;
+
+    if (!options.outputRoot.empty())
+    {
+        mOutputRootText = options.outputRoot;
+        mOutputRoot = std::filesystem::path(mOutputRootText);
+    }
+
+    mBatchAutoStartRequested = options.autoStartBatch;
+    mExitWhenBatchDone = options.exitWhenDone;
+}
 NeuralPVSExporter::~NeuralPVSExporter() {}
 
 void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
@@ -342,6 +429,25 @@ void NeuralPVSExporter::onLoad(RenderContext* pRenderContext)
     createPVVPass();
     createPVVRayPass();
     createPVVRenderPass();
+
+    if (mBatchAutoStartRequested)
+    {
+        mBatchAutoStartRequested = false;
+        try
+        {
+            startBatchExport();
+        }
+        catch (const std::exception& e)
+        {
+            mBatchExportActive = false;
+            mBatchStartPartPending = false;
+            mProgressiveExportActive = false;
+            mBatchExportStatus = "Auto-start batch export failed: " + std::string(e.what());
+            mLastExportStatus = mBatchExportStatus;
+            if (mExitWhenBatchDone)
+                shutdown(1);
+        }
+    }
 }
 
 void NeuralPVSExporter::onShutdown() {}
@@ -376,6 +482,8 @@ void NeuralPVSExporter::onFrameRender(RenderContext* pRenderContext, const ref<F
             mProgressiveExportActive = false;
             mBatchExportStatus = "Batch export stopped: " + std::string(e.what());
             mLastExportStatus = mBatchExportStatus;
+            if (mExitWhenBatchDone)
+                shutdown(1);
         }
     }
 
@@ -1843,6 +1951,8 @@ void NeuralPVSExporter::startBatchExportPart()
         mBatchStartPartPending = false;
         mBatchExportStatus = "Batch export complete: " + std::to_string(mBatchExportParts.size()) + " parts exported.";
         mLastExportStatus = mBatchExportStatus;
+        if (mExitWhenBatchDone)
+            shutdown(0);
         return;
     }
 
@@ -2776,6 +2886,8 @@ void NeuralPVSExporter::finishProgressiveExport()
                 "Batch export complete: " + std::to_string(mBatchExportParts.size()) +
                 " parts exported. Last dataset: " + completedDataset + ".";
             mLastExportStatus = mBatchExportStatus;
+            if (mExitWhenBatchDone)
+                shutdown(0);
         }
         else
         {
@@ -3524,7 +3636,15 @@ int runMain(int argc, char** argv)
     config.windowDesc.resizableWindow = true;
     config.pauseTime = true;
 
-    NeuralPVSExporter app(config);
+    bool showHelp = false;
+    NeuralPVSExporter::CommandLineOptions options = parseCommandLineOptions(argc, argv, config, showHelp);
+    if (showHelp)
+    {
+        printCommandLineUsage();
+        return 0;
+    }
+
+    NeuralPVSExporter app(config, options);
     return app.run();
 }
 
