@@ -26,12 +26,21 @@ cbuffer PVVCB
     uint2 gPadding0;
 };
 
+float3 applyNeuralPVSVolumeConvention(float3 p)
+{
+    return float3(p.y, p.x, p.z);
+}
+
 bool worldToVolume01(float3 worldPos, out float3 p)
 {
     if (gUseProjectionVolume == 0u)
     {
         p = (worldPos - gSceneMin) / gSceneExtent;
-        return all(p >= 0.0f) && all(p <= 1.0f);
+        if (!all(p >= 0.0f) || !all(p <= 1.0f))
+            return false;
+
+        p = applyNeuralPVSVolumeConvention(p);
+        return true;
     }
 
     float3 rel = worldPos - gViewCellPosition;
@@ -44,11 +53,10 @@ bool worldToVolume01(float3 worldPos, out float3 p)
 
     float xNdc = dot(rel, normalize(gViewCellRight)) / max(1e-6f, depth * gTanHalfFovX);
     float yNdc = dot(rel, normalize(gViewCellUp)) / max(1e-6f, depth * gTanHalfFovY);
-    // Linear-Z: z = (depth - near) / (far - near).
-    // Maps depth==near → 0, depth==far → 1. Consistent with the inverse lerp(near,far,z)
-    // used in rayVoxelToWorld(). Using (depth + near) would push far-plane voxels above 1.0
-    // and cause them to be rejected by the all(p <= 1.0f) guard.
-    float z = (depth - gViewCellNearPlane) / max(1e-6f, gViewCellFarPlane - gViewCellNearPlane);
+    // Linear-Z: z = (depth + near) / (far - near).
+    // Matches Unity's GetVolumeProjectionMatrix which sets P[2,3] = +n/(f-n),
+    // making clip.z (used directly, without /w) equal to (d+n)/(f-n).
+    float z = (depth + gViewCellNearPlane) / max(1e-6f, gViewCellFarPlane - gViewCellNearPlane);
     if (gLinearZ == 0u)
     {
         z = log2(gLogDepthScale * (depth / gViewCellNearPlane) + 1.0f) /
@@ -56,7 +64,11 @@ bool worldToVolume01(float3 worldPos, out float3 p)
     }
 
     p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
-    return all(p >= 0.0f) && all(p <= 1.0f);
+    if (!all(p >= 0.0f) || !all(p <= 1.0f))
+        return false;
+
+    p = applyNeuralPVSVolumeConvention(p);
+    return true;
 }
 
 [numthreads(16, 16, 1)]
@@ -218,12 +230,12 @@ float3 rayVolume01ToWorld(float3 voxel01)
         return gRaySceneMin + voxel01 * gRaySceneExtent;
 
     // Invert the depth encoding used during GV generation.
-    // Linear-Z forward:  z = (depth - near) / (far - near)  → inverse: depth = lerp(near, far, z)
+    // Linear-Z forward:  z = (depth + near) / (far - near)  → inverse: depth = z*(far-near) - near
     // Log-depth forward: z = log2(S*(depth/near)+1) / log2(S*(far/near)+1) → inverse: exponential
     float depth;
     if (gRayLinearZ != 0u)
     {
-        depth = lerp(gRayViewCellNearPlane, gRayViewCellFarPlane, voxel01.z);
+        depth = voxel01.z * (gRayViewCellFarPlane - gRayViewCellNearPlane) - gRayViewCellNearPlane;
     }
     else
     {

@@ -82,12 +82,21 @@ void getFrustumAABB(out float3 boxMin, out float3 boxMax)
 
 // Maps a world position to [0,1]^3 volume coordinates.
 // Mirrors worldToVolume01 in NeuralPVSGV.3d.slang and NeuralPVSPVV.cs.slang.
+float3 applyNeuralPVSVolumeConvention(float3 p)
+{
+    return float3(p.y, p.x, p.z);
+}
+
 bool worldToVolume01(float3 worldPos, out float3 p)
 {
     if (gVolumeMappingMode == 0u)
     {
         p = (worldPos - gVolumeMin) / gVolumeExtent;
-        return all(p >= 0.0f) && all(p <= 1.0f);
+        if (!all(p >= 0.0f) || !all(p <= 1.0f))
+            return false;
+
+        p = applyNeuralPVSVolumeConvention(p);
+        return true;
     }
 
     float3 rel = worldPos - gViewCellPosition;
@@ -110,7 +119,11 @@ bool worldToVolume01(float3 worldPos, out float3 p)
     }
 
     p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
-    return all(p >= 0.0f) && all(p <= 1.0f);
+    if (!all(p >= 0.0f) || !all(p <= 1.0f))
+        return false;
+
+    p = applyNeuralPVSVolumeConvention(p);
+    return true;
 }
 
 bool isOccupied(float3 worldPos)

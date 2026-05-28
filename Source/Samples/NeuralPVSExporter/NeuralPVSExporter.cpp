@@ -221,8 +221,10 @@ namespace
         }
 
         const float3 upHint = std::abs(basis.forward.y) > 0.98f ? float3(0.f, 0.f, 1.f) : float3(0.f, 1.f, 0.f);
-        basis.right = normalizedOrDefault(cross(upHint, basis.forward), float3(1.f, 0.f, 0.f));
-        basis.up = normalizedOrDefault(cross(basis.forward, basis.right), upHint);
+        // right = forward × upHint (matches Unity: right points +X for a -Z-looking camera)
+        basis.right = normalizedOrDefault(cross(basis.forward, upHint), float3(1.f, 0.f, 0.f));
+        // up = right × forward (completes right-handed orthonormal basis)
+        basis.up = normalizedOrDefault(cross(basis.right, basis.forward), upHint);
         return basis;
     }
 
@@ -631,8 +633,12 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             w.dropdown("Pipeline preset", pipelinePresets, mPipelinePreset);
 
             const bool unityStyleDepthPVV = mPipelinePreset == 1u;
+            // Visibility mode is determined by pipeline preset (depth cameras vs rays).
             mVisibilityMode = unityStyleDepthPVV ? 1u : 0u;
-            mVolumeMappingMode = unityStyleDepthPVV ? 1u : 0u;
+            // Volume mapping mode is independent of pipeline preset for the Falcor native path.
+            // For Unity-style preset, force projection volume to match Unity exactly.
+            if (unityStyleDepthPVV)
+                mVolumeMappingMode = 1u;
 
             if (unityStyleDepthPVV)
             {
@@ -643,7 +649,11 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
             else
             {
                 w.text("Visibility mode: Ray-tested view cell");
-                w.text("Volume mapping: World AABB volume");
+                Gui::DropdownList volumeMappingModes = {
+                    {0, "World AABB (all-direction ortho)"},
+                    {1, "Projection volume (view-cell frustum)"},
+                };
+                w.dropdown("Volume mapping", volumeMappingModes, mVolumeMappingMode);
             }
 
             w.var("Camera aspect ratio", mCameraAspectRatio, 0.1f, 4.0f, 0.01f);
@@ -1357,8 +1367,9 @@ void NeuralPVSExporter::appendCurrentCameraToCapturedPath()
     sample.center = mpCamera->getPosition();
     sample.forward = normalizedOrDefault(mpCamera->getTarget() - sample.center, float3(0.f, 0.f, -1.f));
     sample.up = normalizedOrDefault(mpCamera->getUpVector(), float3(0.f, 1.f, 0.f));
-    sample.right = normalizedOrDefault(cross(sample.up, sample.forward), float3(1.f, 0.f, 0.f));
-    sample.up = normalizedOrDefault(cross(sample.forward, sample.right), sample.up);
+    // right = forward × up, up = right × forward (right-handed, +X right for -Z camera)
+    sample.right = normalizedOrDefault(cross(sample.forward, sample.up), float3(1.f, 0.f, 0.f));
+    sample.up = normalizedOrDefault(cross(sample.right, sample.forward), sample.up);
 
     const float fovYRadians = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
     sample.fovYDegrees = std::isfinite(fovYRadians) && fovYRadians > 0.f
@@ -2190,8 +2201,9 @@ NeuralPVSExporter::ExportSample NeuralPVSExporter::makeCurrentCameraSample() con
     sample.center = mpCamera->getPosition();
     sample.forward = normalizedOrDefault(mpCamera->getTarget() - sample.center, float3(0.f, 0.f, -1.f));
     sample.up = normalizedOrDefault(mpCamera->getUpVector(), float3(0.f, 1.f, 0.f));
-    sample.right = normalizedOrDefault(cross(sample.up, sample.forward), float3(1.f, 0.f, 0.f));
-    sample.up = normalizedOrDefault(cross(sample.forward, sample.right), sample.up);
+    // right = forward × up, up = right × forward (right-handed, +X right for -Z camera)
+    sample.right = normalizedOrDefault(cross(sample.forward, sample.up), float3(1.f, 0.f, 0.f));
+    sample.up = normalizedOrDefault(cross(sample.right, sample.forward), sample.up);
 
     const float fovYRadians = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
     sample.fovYDegrees = std::isfinite(fovYRadians) && fovYRadians > 0.f
@@ -3298,6 +3310,7 @@ void NeuralPVSExporter::writeExportMetadata(
     metadata << "  \"sampling_mode\": \"" << (mSamplingMode == 1 ? "path_csv" : "grid") << "\",\n";
     metadata << "  \"visibility_mode\": \"" << (useCameraFrustum ? "unity_view_cell" : "view_cell") << "\",\n";
     metadata << "  \"volume_mapping\": \"" << (mVolumeMappingMode == 1 ? "unity_projection" : "world_aabb") << "\",\n";
+    metadata << "  \"volume_axis_remap\": \"swapxy\",\n";
     metadata << "  \"path_csv\": \"" << (mSamplingMode == 1 ? std::filesystem::path(mPathCsvText).generic_string() : "") << "\",\n";
     metadata << "  \"camera_aspect_ratio\": " << mCameraAspectRatio << ",\n";
     metadata << "  \"view_cell_radius\": " << mViewCellRadius << ",\n";

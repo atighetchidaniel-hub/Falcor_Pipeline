@@ -72,12 +72,21 @@ bool isInsideMainCameraFrustum(float3 worldPos)
            ndc.z >= 0.0f && ndc.z <= 1.0f;
 }
 
+float3 applyNeuralPVSVolumeConvention(float3 p)
+{
+    return float3(p.y, p.x, p.z);
+}
+
 bool worldToVolume01(float3 worldPos, out float3 p)
 {
     if (gRenderVolumeMappingMode == 0u)
     {
         p = (worldPos - gRenderPVVVolumeMin) / gRenderPVVVolumeExtent;
-        return all(p >= 0.0f) && all(p <= 1.0f);
+        if (!all(p >= 0.0f) || !all(p <= 1.0f))
+            return false;
+
+        p = applyNeuralPVSVolumeConvention(p);
+        return true;
     }
 
     float3 rel = worldPos - gViewCellPosition;
@@ -101,8 +110,11 @@ bool worldToVolume01(float3 worldPos, out float3 p)
     }
 
     p = float3(xNdc * 0.5f + 0.5f, yNdc * 0.5f + 0.5f, z);
+    if (!all(p >= 0.0f) || !all(p <= 1.0f))
+        return false;
 
-    return all(p >= 0.0f) && all(p <= 1.0f);
+    p = applyNeuralPVSVolumeConvention(p);
+    return true;
 }
 
 bool isVisibleInPVV(float3 worldPos)
