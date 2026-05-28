@@ -426,6 +426,51 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
     }
 
     {
+        auto group = w.group("Batch Export Plan", false);
+        if (group)
+        {
+            w.textbox("Plan CSV", mBatchPlanCsvText);
+            if (w.button("Load batch plan"))
+            {
+                try
+                {
+                    loadBatchExportPlan();
+                }
+                catch (const std::exception& e)
+                {
+                    mBatchExportStatus = "Can't load batch plan: " + std::string(e.what());
+                    mLastExportStatus = mBatchExportStatus;
+                }
+            }
+            if (w.button("Start batch export"))
+            {
+                if (isModeRunning())
+                    stopCurrentMode();
+
+                try
+                {
+                    startBatchExport();
+                }
+                catch (const std::exception& e)
+                {
+                    mBatchExportActive = false;
+                    mProgressiveExportActive = false;
+                    mBatchExportStatus = "Can't start batch export: " + std::string(e.what());
+                    mLastExportStatus = mBatchExportStatus;
+                }
+            }
+            w.text(mBatchExportStatus);
+            if (mBatchExportActive)
+            {
+                w.text(
+                    "Batch part " + std::to_string(mBatchExportIndex + 1u) + " / " +
+                    std::to_string(uint32_t(mBatchExportParts.size()))
+                );
+            }
+        }
+    }
+
+    {
         auto group = w.group("Falcor Pipeline", true);
         if (group)
         {
@@ -1610,6 +1655,9 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 
 bool NeuralPVSExporter::isModeRunning() const
 {
+    if (mBatchExportActive)
+        return true;
+
     if (mLiveNeuralPVSActive)
         return true;
 
@@ -1624,6 +1672,154 @@ void NeuralPVSExporter::useGeneratedRenderPaths()
     const std::filesystem::path datasetRoot = std::filesystem::path(mOutputRootText) / mDatasetName;
     mRenderDatasetRootText = datasetRoot.string();
     mPredictedPVVRootText = (datasetRoot / "predicted_pvv").string();
+}
+
+void NeuralPVSExporter::loadBatchExportPlan()
+{
+    const std::filesystem::path planPath = std::filesystem::path(mBatchPlanCsvText);
+    std::ifstream input(planPath);
+    if (!input)
+    {
+        FALCOR_THROW("Failed to open batch plan '{}'.", planPath.string());
+    }
+
+    std::string headerLine;
+    if (!std::getline(input, headerLine))
+    {
+        FALCOR_THROW("Batch plan '{}' is empty.", planPath.string());
+    }
+
+    const std::vector<std::string> header = splitCsvLine(headerLine);
+    auto findColumn = [&](const std::string& name) -> int32_t
+    {
+        for (size_t i = 0; i < header.size(); ++i)
+        {
+            if (toLower(header[i]) == toLower(name))
+                return int32_t(i);
+        }
+        return -1;
+    };
+
+    const int32_t datasetColumn = findColumn("dataset_name");
+    const int32_t sceneColumn = findColumn("scene_path");
+    const int32_t csvColumn = findColumn("camera_path_csv");
+    const int32_t samplesColumn = findColumn("samples");
+    if (datasetColumn < 0 || sceneColumn < 0 || csvColumn < 0)
+    {
+        FALCOR_THROW("Batch plan '{}' must contain dataset_name, scene_path, and camera_path_csv columns.", planPath.string());
+    }
+
+    std::vector<BatchExportPart> parts;
+    const std::filesystem::path planDir = planPath.parent_path();
+    std::string line;
+    while (std::getline(input, line))
+    {
+        if (trim(line).empty())
+            continue;
+
+        const std::vector<std::string> tokens = splitCsvLine(line);
+        const size_t requiredColumn = size_t(std::max(datasetColumn, std::max(sceneColumn, csvColumn)));
+        if (tokens.size() <= requiredColumn)
+            continue;
+
+        BatchExportPart part;
+        part.datasetName = trim(tokens[datasetColumn]);
+        part.scenePath = std::filesystem::path(trim(tokens[sceneColumn]));
+        part.pathCsv = std::filesystem::path(trim(tokens[csvColumn]));
+        if (part.scenePath.is_relative())
+            part.scenePath = planDir / part.scenePath;
+        if (part.pathCsv.is_relative())
+            part.pathCsv = planDir / part.pathCsv;
+
+        if (samplesColumn >= 0 && size_t(samplesColumn) < tokens.size())
+        {
+            try
+            {
+                part.samples = uint32_t(std::stoul(trim(tokens[samplesColumn])));
+            }
+            catch (...)
+            {
+                part.samples = 0;
+            }
+        }
+
+        if (part.datasetName.empty())
+        {
+            FALCOR_THROW("Batch plan '{}' has a row with an empty dataset_name.", planPath.string());
+        }
+        if (!std::filesystem::exists(part.scenePath))
+        {
+            FALCOR_THROW("Batch plan scene '{}' does not exist.", part.scenePath.string());
+        }
+        if (!std::filesystem::exists(part.pathCsv))
+        {
+            FALCOR_THROW("Batch plan camera CSV '{}' does not exist.", part.pathCsv.string());
+        }
+
+        parts.push_back(part);
+    }
+
+    if (parts.empty())
+    {
+        FALCOR_THROW("Batch plan '{}' did not contain any export rows.", planPath.string());
+    }
+
+    mBatchExportParts = std::move(parts);
+    mBatchExportIndex = 0;
+    mBatchExportStatus = "Loaded batch plan with " + std::to_string(mBatchExportParts.size()) + " parts.";
+    mLastExportStatus = mBatchExportStatus;
+}
+
+void NeuralPVSExporter::startBatchExport()
+{
+    loadBatchExportPlan();
+    mBatchExportActive = true;
+    mBatchExportIndex = 0;
+    mOutputRoot = std::filesystem::path(mOutputRootText);
+    mExportMode = 2;
+    mSamplingMode = 1;
+    mBatchExportStatus = "Starting batch export with " + std::to_string(mBatchExportParts.size()) + " parts.";
+    mLastExportStatus = mBatchExportStatus;
+    startBatchExportPart();
+}
+
+void NeuralPVSExporter::startBatchExportPart()
+{
+    if (!mBatchExportActive)
+        return;
+
+    if (mBatchExportIndex >= mBatchExportParts.size())
+    {
+        mBatchExportActive = false;
+        mBatchExportStatus = "Batch export complete: " + std::to_string(mBatchExportParts.size()) + " parts exported.";
+        mLastExportStatus = mBatchExportStatus;
+        return;
+    }
+
+    const BatchExportPart& part = mBatchExportParts[mBatchExportIndex];
+    mScenePath = part.scenePath;
+    mScenePathText = part.scenePath.string();
+    mPathCsvText = part.pathCsv.string();
+    mDatasetName = part.datasetName;
+    mOutputRoot = std::filesystem::path(mOutputRootText);
+    useGeneratedRenderPaths();
+
+    loadScene(mScenePath);
+    createResources();
+    createPreviewPass();
+    createGVPass();
+    createPVVDepthPass();
+    createPVVPass();
+    createPVVRayPass();
+    createPVVRenderPass();
+
+    startProgressiveExport();
+
+    mBatchExportStatus =
+        "Batch part " + std::to_string(mBatchExportIndex + 1u) + " / " +
+        std::to_string(mBatchExportParts.size()) + ": exporting " + part.datasetName +
+        (part.samples > 0u ? " (" + std::to_string(part.samples) + " planned samples)" : "");
+    mLastExportStatus = mBatchExportStatus;
 }
 
 uint32_t NeuralPVSExporter::getRenderVolumeSampleIndex() const
@@ -1711,6 +1907,7 @@ void NeuralPVSExporter::startSelectedMode()
 
 void NeuralPVSExporter::stopCurrentMode()
 {
+    const bool wasBatchExport = mBatchExportActive;
     const bool wasProgressiveExport = mProgressiveExportActive;
     const bool wasLiveNeuralPVS = mLiveNeuralPVSActive;
     const bool wasRenderPVV = mRenderPVVActive || mRenderPVVCullScene;
@@ -1728,6 +1925,7 @@ void NeuralPVSExporter::stopCurrentMode()
     }
 
     mProgressiveExportActive = false;
+    mBatchExportActive = false;
     mLiveNeuralPVSActive = false;
     mLiveHasPrediction = false;
     mPreviewPlayback = false;
@@ -1749,7 +1947,17 @@ void NeuralPVSExporter::stopCurrentMode()
 
     if (wasProgressiveExport)
     {
-        mLastExportStatus = "Stopped export at sample " + std::to_string(stoppedExportIndex) + ".";
+        if (wasBatchExport)
+        {
+            mBatchExportStatus =
+                "Stopped batch export at part " + std::to_string(mBatchExportIndex + 1u) +
+                " sample " + std::to_string(stoppedExportIndex) + ".";
+            mLastExportStatus = mBatchExportStatus;
+        }
+        else
+        {
+            mLastExportStatus = "Stopped export at sample " + std::to_string(stoppedExportIndex) + ".";
+        }
         return;
     }
 
@@ -2504,6 +2712,39 @@ void NeuralPVSExporter::finishProgressiveExport()
         "Exported " + std::to_string(mProgressiveExportSamples.size()) + " " + mDatasetName +
         " samples in " + std::to_string(uint32_t(std::round(mProgressiveExportElapsedMs))) +
         " ms (avg " + std::to_string(uint32_t(std::round(avgMs))) + " ms/sample).";
+
+    if (mBatchExportActive)
+    {
+        const std::string completedDataset = mDatasetName;
+        ++mBatchExportIndex;
+        if (mBatchExportIndex >= mBatchExportParts.size())
+        {
+            mBatchExportActive = false;
+            mBatchExportStatus =
+                "Batch export complete: " + std::to_string(mBatchExportParts.size()) +
+                " parts exported. Last dataset: " + completedDataset + ".";
+            mLastExportStatus = mBatchExportStatus;
+        }
+        else
+        {
+            mBatchExportStatus =
+                "Finished " + completedDataset + ". Starting part " +
+                std::to_string(mBatchExportIndex + 1u) + " / " +
+                std::to_string(mBatchExportParts.size()) + ".";
+            mLastExportStatus = mBatchExportStatus;
+            try
+            {
+                startBatchExportPart();
+            }
+            catch (const std::exception& e)
+            {
+                mBatchExportActive = false;
+                mProgressiveExportActive = false;
+                mBatchExportStatus = "Batch export stopped: " + std::string(e.what());
+                mLastExportStatus = mBatchExportStatus;
+            }
+        }
+    }
 }
 
 void NeuralPVSExporter::exportOneSample(

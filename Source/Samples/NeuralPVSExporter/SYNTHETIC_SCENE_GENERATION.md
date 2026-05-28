@@ -66,7 +66,7 @@ python3 Source/Samples/NeuralPVSExporter/tools/generate_synthetic_neuralpvs_batc
   --glb-dir /path/to/Unity/Assets/models
 ```
 
-Export every part listed in the generated `_export_plan.csv`, then merge those exported part datasets:
+Load the generated `_export_plan.csv` in NeuralPVSExporter under **Batch Export Plan** and click **Start batch export**. Falcor will load each listed scene/path pair and export every part automatically. Then merge those exported part datasets:
 
 ```bash
 python3 Source/Samples/NeuralPVSExporter/tools/merge_neuralpvs_datasets.py \

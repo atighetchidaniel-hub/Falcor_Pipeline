@@ -53,6 +53,14 @@ private:
         float fovYRadians = 1.04719755f;
     };
 
+    struct BatchExportPart
+    {
+        std::string datasetName;
+        std::filesystem::path scenePath;
+        std::filesystem::path pathCsv;
+        uint32_t samples = 0;
+    };
+
     void loadScene(const std::filesystem::path& path);
     void createResources();
     void createPreviewPass();
@@ -95,6 +103,9 @@ private:
     void startProgressiveExport();
     void processProgressiveExportSample(RenderContext* pRenderContext);
     void finishProgressiveExport();
+    void loadBatchExportPlan();
+    void startBatchExport();
+    void startBatchExportPart();
     void exportSceneVolumes(RenderContext* pRenderContext);
     std::vector<ExportSample> buildExportSamples(const float3& sceneCenter, const float3& sceneExtent) const;
     void validateExportSamples(const std::vector<ExportSample>& samples, bool useCameraFrustum) const;
@@ -158,6 +169,7 @@ private:
     std::string mScenePathText = "T:/Falcor/media/Bistro/ORCA/Bistro_v5_2/BistroExterior.pyscene";
     std::string mOutputRootText = "T:/Falcor/neuralpvs_export_test/datasets";
     std::string mDatasetName = "falcor_bistro_exterior_builtin_256";
+    std::string mBatchPlanCsvText = "T:/Falcor/media/SyntheticNeuralPVS/synth_train_1000_r30_batch/synth_train_1000_r30_batch_export_plan.csv";
 
     std::filesystem::path mScenePath = mScenePathText;
     std::filesystem::path mOutputRoot = mOutputRootText;
@@ -280,6 +292,10 @@ private:
     std::vector<ExportSample> mProgressiveExportSamples;
     std::vector<uint64_t> mProgressiveGVBitCounts;
     std::vector<uint64_t> mProgressivePVVBitCounts;
+    bool mBatchExportActive = false;
+    uint32_t mBatchExportIndex = 0;
+    std::vector<BatchExportPart> mBatchExportParts;
+    std::string mBatchExportStatus = "Batch export idle.";
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
