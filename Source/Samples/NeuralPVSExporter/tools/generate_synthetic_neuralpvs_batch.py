@@ -33,12 +33,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", required=True,
                         help="Base name for the batch and generated part files.")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--scene-count", type=int, default=10,
-                        help="Number of fresh synthetic scene parts to generate.")
-    parser.add_argument("--samples-per-scene", type=int, default=100,
+    parser.add_argument("--scene-count", type=int, default=100,
+                        help="Number of fresh synthetic scene parts to generate. "
+                             "Default is aggressive Unity-parity: 100 layouts.")
+    parser.add_argument("--samples-per-scene", type=int, default=10,
                         help="CSV samples per generated scene part.")
     parser.add_argument("--total-samples", type=int, default=None,
                         help="Optional total sample count. Overrides samples-per-scene by distributing samples evenly.")
+    parser.add_argument("--fresh-scene-per-sample", action="store_true",
+                        help="Most Unity-like mode: make one .pyscene per sample. "
+                             "If --total-samples is omitted, uses scene-count * samples-per-scene.")
     parser.add_argument("--seed-stride", type=int, default=1009,
                         help="Seed increment between scene parts.")
     parser.add_argument("--radius", "--view-cell-radius-cm", dest="radius_cm", type=float, default=30.0,
@@ -67,6 +71,12 @@ def clean_remainder(args: List[str]) -> List[str]:
 
 def main() -> None:
     args = parse_args()
+    if args.fresh_scene_per_sample:
+        total_samples = args.total_samples or (args.scene_count * args.samples_per_scene)
+        args.scene_count = total_samples
+        args.samples_per_scene = 1
+        args.total_samples = total_samples
+
     if args.scene_count < 1:
         raise ValueError("--scene-count must be >= 1")
     if args.samples_per_scene < 1:
@@ -139,7 +149,9 @@ def main() -> None:
     batch_manifest = {
         "name": args.name,
         "scene_count": args.scene_count,
+        "samples_per_scene": args.samples_per_scene,
         "total_samples": total,
+        "fresh_scene_per_sample": args.fresh_scene_per_sample,
         "radius_cm": args.radius_cm,
         "generator": str(generator),
         "parts": rows,

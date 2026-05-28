@@ -1004,13 +1004,16 @@ def make_instances(args: argparse.Namespace,
     placed: List[Vec3] = []
     min_d2 = args.min_distance_between_objects ** 2
     attempts = 0
+    max_attempts = args.object_count * 15
 
-    while len(placed) < args.object_count and attempts < args.object_count * 15:
+    while len(placed) < args.object_count and attempts < max_attempts:
         attempts += 1
         p = generate_position(rng, args, clusters)
 
-        # Min-distance check (XZ plane)
-        if any((p[0]-q[0])**2 + (p[2]-q[2])**2 < min_d2 for q in placed):
+        # Unity uses Physics.OverlapSphere() in full 3D. We cannot reproduce
+        # Unity physics offline, but a 3D distance check is much closer than
+        # the old XZ-only spacing and prevents stacked near-duplicate objects.
+        if any(v3_length(v3_sub(p, q)) ** 2 < min_d2 for q in placed):
             continue
 
         # Boolean zone rejection — tested before scale is known so use a generous
@@ -1052,6 +1055,54 @@ def make_instances(args: argparse.Namespace,
             translation=p, scaling=sc, rotation=rot,
         ))
         placed.append(p)
+
+    # Unity's RuntimeSceneGenerator tries a relaxed second pass if it failed to
+    # reach the requested object count: larger spawn bounds and lower spacing.
+    # Matching that behavior matters for hard seeds in dense GLB scenes.
+    if len(placed) < args.object_count and args.unity_parity:
+        old_bounds = (args.bounds_x, args.bounds_y, args.bounds_z)
+        old_min_distance = args.min_distance_between_objects
+        args.bounds_x *= 1.5
+        args.bounds_y *= 1.5
+        args.bounds_z *= 1.5
+        args.min_distance_between_objects *= 0.7
+        min_d2 = args.min_distance_between_objects ** 2
+        relaxed_attempts = 0
+        relaxed_max_attempts = max(args.object_count * 10, 100)
+
+        try:
+            while len(placed) < args.object_count and relaxed_attempts < relaxed_max_attempts:
+                relaxed_attempts += 1
+                p = generate_position(rng, args, clusters)
+                if any(v3_length(v3_sub(p, q)) ** 2 < min_d2 for q in placed):
+                    continue
+                if any(point_in_zone(p, z) for z in zones):
+                    continue
+
+                mesh = select_mesh(rng, args, glb_models)
+                sc = generate_scale(rng, args)
+                obj_radius = math.sqrt(sc[0]**2 + sc[1]**2 + sc[2]**2) * 0.5
+                if any(point_in_zone(p, z, expand=obj_radius) for z in zones):
+                    continue
+
+                if args.rotation_mode == "full":
+                    rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 360))
+                elif args.rotation_mode == "y_only":
+                    rot = (0.0, rng.uniform(0, 360), 0.0)
+                else:
+                    rot = (rng.uniform(0, 360), rng.uniform(0, 360), rng.uniform(0, 20))
+
+                reserved_colors = 2 if (args.fixed_floor or args.boundary_walls or args.wall_count > 0) else 0
+                cidx = rng.randint(reserved_colors, len(colors) - 1)
+                instances.append(Instance(
+                    name=f"object_{len(placed):04d}",
+                    mesh=mesh, color_idx=cidx,
+                    translation=p, scaling=sc, rotation=rot,
+                ))
+                placed.append(p)
+        finally:
+            args.bounds_x, args.bounds_y, args.bounds_z = old_bounds
+            args.min_distance_between_objects = old_min_distance
 
     # --- Environmental planes ---
     instances.extend(make_env_planes(rng, args, len(colors)))
@@ -1615,6 +1666,10 @@ def apply_unity_parity_preset(args: argparse.Namespace) -> None:
 
     set_unless_provided(args, flags, "randomize_camera_target", False, "--randomize-camera-target", "--no-randomize-camera-target")
     set_unless_provided(args, flags, "camera_use_scene_bounds", True, "--camera-use-scene-bounds", "--no-camera-use-scene-bounds")
+    # For the current Falcor ray/world pipeline, CSV x/y/z is both the ViewCell
+    # center and the World-AABB volume center. Keep it inside the generated
+    # scene by default; using the outside orbit camera here is only correct for
+    # Unity-projection style exports.
     set_unless_provided(args, flags, "path_position_mode", "moving_viewcell", "--path-position-mode")
     set_unless_provided(args, flags, "clamp_camera_y", False, "--clamp-camera-y", "--no-clamp-camera-y")
     set_unless_provided(args, flags, "camera_min_distance", 5.0, "--camera-min-distance")
