@@ -82,6 +82,101 @@ namespace
         return oss.str();
     }
 
+    bool pathExists(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        return std::filesystem::exists(path, ec);
+    }
+
+    void appendUniquePath(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path)
+    {
+        if (path.empty())
+            return;
+
+        const std::string key = path.lexically_normal().generic_string();
+        const auto it = std::find_if(paths.begin(), paths.end(), [&](const std::filesystem::path& existing)
+        {
+            return existing.lexically_normal().generic_string() == key;
+        });
+        if (it == paths.end())
+            paths.push_back(path);
+    }
+
+    std::vector<std::filesystem::path> predictedPVVRootCandidates(
+        const std::filesystem::path& requestedRoot,
+        const std::filesystem::path& datasetRoot
+    )
+    {
+        std::vector<std::filesystem::path> roots;
+
+        if (!requestedRoot.empty())
+        {
+            appendUniquePath(roots, requestedRoot);
+            appendUniquePath(roots, requestedRoot / "predicted_pvv");
+            appendUniquePath(roots, requestedRoot / "inference" / "0");
+            appendUniquePath(roots, requestedRoot / "inference" / "0" / "predicted_pvv");
+            appendUniquePath(roots, requestedRoot / "0");
+            appendUniquePath(roots, requestedRoot / "0" / "predicted_pvv");
+        }
+
+        if (!datasetRoot.empty())
+        {
+            appendUniquePath(roots, datasetRoot / "predicted_pvv");
+        }
+
+        return roots;
+    }
+
+    std::vector<std::filesystem::path> predictedPVVFileCandidates(
+        const std::filesystem::path& requestedRoot,
+        const std::filesystem::path& datasetRoot,
+        uint32_t sampleIndex
+    )
+    {
+        std::vector<std::filesystem::path> files;
+        for (const std::filesystem::path& root : predictedPVVRootCandidates(requestedRoot, datasetRoot))
+        {
+            appendUniquePath(files, root / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz"));
+            appendUniquePath(files, root / fourDigitName(sampleIndex, "_predicted_pvv.bin.gz"));
+        }
+        return files;
+    }
+
+    std::filesystem::path resolvePredictedPVVRoot(
+        const std::filesystem::path& requestedRoot,
+        const std::filesystem::path& datasetRoot
+    )
+    {
+        for (const std::filesystem::path& root : predictedPVVRootCandidates(requestedRoot, datasetRoot))
+        {
+            if (pathExists(root / "0_predicted_pvv.bin.gz") || pathExists(root / "0000_predicted_pvv.bin.gz"))
+                return root;
+        }
+
+        for (const std::filesystem::path& root : predictedPVVRootCandidates(requestedRoot, datasetRoot))
+        {
+            if (pathExists(root))
+                return root;
+        }
+
+        return requestedRoot.empty() ? (datasetRoot / "predicted_pvv") : requestedRoot;
+    }
+
+    std::filesystem::path resolvePredictedPVVFile(
+        const std::filesystem::path& requestedRoot,
+        const std::filesystem::path& datasetRoot,
+        uint32_t sampleIndex
+    )
+    {
+        for (const std::filesystem::path& file : predictedPVVFileCandidates(requestedRoot, datasetRoot, sampleIndex))
+        {
+            if (pathExists(file))
+                return file;
+        }
+
+        return {};
+    }
+
     std::string trim(std::string value)
     {
         auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
@@ -684,6 +779,16 @@ void NeuralPVSExporter::onGuiRender(Gui* pGui)
                 }
                 w.textbox("Dataset path", mRenderDatasetRootText);
                 w.textbox("PVV path", mPredictedPVVRootText);
+                if (w.button("Normalize PVV path"))
+                {
+                    mPredictedPVVRootText = getRenderPredictedPVVRoot().string();
+                    mRenderLoadedSampleIndex = 0xffffffffu;
+                    mRenderLoadedVolumeSource = 0xffffffffu;
+                    mRenderLoadedVolumePath.clear();
+                    mRenderStatus = "Normalized PVV path to " + mPredictedPVVRootText;
+                    mLastExportStatus = mRenderStatus;
+                }
+                w.text("PVV path accepts predicted_pvv, inference/0, inference, or experiment folders.");
 
                 Gui::DropdownList volumeSources = {
                     {0, "Predicted PVV (neural net output)"},
@@ -1731,11 +1836,20 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 
         if (mRenderVolumeSource == 0u)
         {
-            const std::filesystem::path predictedRoot = getRenderPredictedPVVRoot();
+            const std::filesystem::path requestedRoot = std::filesystem::path(mPredictedPVVRootText);
+            const std::filesystem::path datasetRoot = mRenderDatasetRoot.empty() ? std::filesystem::path(mRenderDatasetRootText) : mRenderDatasetRoot;
+            const std::vector<std::filesystem::path> triedPaths = predictedPVVFileCandidates(requestedRoot, datasetRoot, volumeSampleIndex);
+
+            std::string triedMessage;
+            for (size_t i = 0; i < triedPaths.size(); ++i)
+            {
+                triedMessage += (i == 0 ? "" : "; ") + triedPaths[i].string();
+            }
+
             mRenderStatus =
                 "Can't find predicted PVV sample " + std::to_string(volumeSampleIndex) +
-                ". Tried " + (predictedRoot / (std::to_string(volumeSampleIndex) + "_predicted_pvv.bin.gz")).string() +
-                " and " + (predictedRoot / fourDigitName(volumeSampleIndex, "_predicted_pvv.bin.gz")).string();
+                ". PVV path can be a predicted_pvv folder, inference/0 folder, inference folder, or full experiment folder. Tried: " +
+                triedMessage;
         }
         else
         {
@@ -2531,16 +2645,9 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
 
     if (mRenderVolumeSource == 0u)
     {
-        const std::filesystem::path predictedRoot = getRenderPredictedPVVRoot();
-        const std::filesystem::path unpaddedPath = predictedRoot / (std::to_string(sampleIndex) + "_predicted_pvv.bin.gz");
-        if (std::filesystem::exists(unpaddedPath))
-            return unpaddedPath;
-
-        const std::filesystem::path paddedPath = predictedRoot / fourDigitName(sampleIndex, "_predicted_pvv.bin.gz");
-        if (std::filesystem::exists(paddedPath))
-            return paddedPath;
-
-        return {};
+        const std::filesystem::path requestedRoot = std::filesystem::path(mPredictedPVVRootText);
+        const std::filesystem::path datasetRoot = mRenderDatasetRoot.empty() ? std::filesystem::path(mRenderDatasetRootText) : mRenderDatasetRoot;
+        return resolvePredictedPVVFile(requestedRoot, datasetRoot, sampleIndex);
     }
 
     if (mRenderVolumeSource == 1u)
@@ -2561,11 +2668,8 @@ std::filesystem::path NeuralPVSExporter::resolveRenderVolumePath() const
 std::filesystem::path NeuralPVSExporter::getRenderPredictedPVVRoot() const
 {
     const std::filesystem::path overrideRoot = std::filesystem::path(mPredictedPVVRootText);
-    if (!overrideRoot.empty())
-        return overrideRoot;
-
     const std::filesystem::path datasetRoot = mRenderDatasetRoot.empty() ? std::filesystem::path(mRenderDatasetRootText) : mRenderDatasetRoot;
-    return datasetRoot / "predicted_pvv";
+    return resolvePredictedPVVRoot(overrideRoot, datasetRoot);
 }
 
 std::filesystem::path NeuralPVSExporter::getRenderFrameOutputPath() const
