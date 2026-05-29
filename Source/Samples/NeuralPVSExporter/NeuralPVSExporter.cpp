@@ -1801,8 +1801,8 @@ void NeuralPVSExporter::loadRenderVolume()
 
 bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 {
-    const std::filesystem::path requestedRoot = std::filesystem::path(mRenderDatasetRootText);
-    if (mRenderSamples.empty() || requestedRoot != mRenderDatasetRoot)
+    const std::filesystem::path requestedDatasetRoot = std::filesystem::path(mRenderDatasetRootText);
+    if (mRenderSamples.empty() || requestedDatasetRoot != mRenderDatasetRoot)
     {
         try
         {
@@ -1836,9 +1836,9 @@ bool NeuralPVSExporter::ensureRenderVolumeLoaded(bool forceReload)
 
         if (mRenderVolumeSource == 0u)
         {
-            const std::filesystem::path requestedRoot = std::filesystem::path(mPredictedPVVRootText);
+            const std::filesystem::path requestedPredictedRoot = std::filesystem::path(mPredictedPVVRootText);
             const std::filesystem::path datasetRoot = mRenderDatasetRoot.empty() ? std::filesystem::path(mRenderDatasetRootText) : mRenderDatasetRoot;
-            const std::vector<std::filesystem::path> triedPaths = predictedPVVFileCandidates(requestedRoot, datasetRoot, volumeSampleIndex);
+            const std::vector<std::filesystem::path> triedPaths = predictedPVVFileCandidates(requestedPredictedRoot, datasetRoot, volumeSampleIndex);
 
             std::string triedMessage;
             for (size_t i = 0; i < triedPaths.size(); ++i)
